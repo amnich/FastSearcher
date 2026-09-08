@@ -1,0 +1,18 @@
+﻿{
+    "SearchFolder":  "D:\\Skrypty",
+    "FileExtensions":  [
+                           "*.*"
+                       ],
+    "FilterModifiedSince":  null,
+    "FilterModifiedLast5Days":  false,
+    "DaysModifiedFilter":  5,
+    "SearchInSubfolders":  true,
+    "LastSearchQuery":  "Mnich",
+    "AutoExpandTree":  true,
+    "FontSize":  13,
+    "Theme":  "Dark",
+    "Language":  "en",
+    "MatchWholeWord":  false,
+    "MatchSameLine":  false,
+    "SearchDebounceMs":  750
+}

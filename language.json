@@ -20,6 +20,10 @@
         "TooltipWholeWord": "Match whole words only (e.g. 'DR' will not match 'poDRill')",
         "ChkSameLine": "Same line",
         "TooltipSameLine": "All search phrases must appear on the same line",
+        "ChkSkipFileName": "Skip file name",
+        "TooltipSkipFileName": "Exclude file names from search (search content only)",
+        "ChkSkipFileContent": "Skip content",
+        "TooltipSkipFileContent": "Exclude file contents from search (search file names only)",
         "LabelDateFilter": "Modified since:",
         "TooltipDateFilter": "Filter files modified on or after this date. Leave empty for all files.",
         "TooltipClearDate": "Clear date filter (show all files)",
@@ -93,11 +97,19 @@
         "PresetDataConfig": "📦 Data & Config (*.json, *.xml, *.yaml, *.csv)",
         "PresetCode": "💻 All Code (*.ps1, *.sql, *.cs, *.py, *.js)",
         "PresetAllFiles": "🌐 All Files (*.*)",
+        "PresetOffice": "📈 Office & PDF (*.xlsx, *.docx, *.pdf, *.odt, *.ods, *.xls, *.doc)",
+        "PresetExcel": "📈 Excel Only (*.xlsx, *.xlsm, *.xls)",
         "PresetAppendSql": "➕ Append *.sql",
         "PresetAppendJson": "➕ Append *.json",
         "PresetAppendXml": "➕ Append *.xml",
         "PresetAppendTxt": "➕ Append *.txt",
-        "PresetResetDefault": "↺ Reset to Default (*.ps1, *.md)"
+        "PresetAppendXlsx": "➕ Append *.xlsx",
+        "PresetAppendDocx": "➕ Append *.docx",
+        "PresetAppendXls": "➕ Append *.xls",
+        "PresetAppendDoc": "➕ Append *.doc",
+        "PresetAppendPdf": "➕ Append *.pdf",
+        "PresetResetDefault": "↺ Reset to Default (*.ps1, *.md)",
+        "PreviewOfficeNotice": "[Plain text extracted — open file for full formatting]"
       }
     },
     "de": {
@@ -119,6 +131,10 @@
         "TooltipWholeWord": "Nur ganze Wörter suchen (z. B. 'DR' findet nicht 'poDRill')",
         "ChkSameLine": "Gleiche Zeile",
         "TooltipSameLine": "Alle Suchbegriffe müssen in derselben Zeile vorkommen",
+        "ChkSkipFileName": "Dateinamen ignorieren",
+        "TooltipSkipFileName": "Suchbegriffe nicht in Dateinamen suchen (nur Dateiinhalte durchsuchen)",
+        "ChkSkipFileContent": "Inhalte ignorieren",
+        "TooltipSkipFileContent": "Dateiinhalte nicht durchsuchen (nur Dateinamen durchsuchen)",
         "LabelDateFilter": "Geändert seit:",
         "TooltipDateFilter": "Dateien filtern, die am oder nach diesem Datum geändert wurden. Datum leeren für alle Dateien.",
         "TooltipClearDate": "Datumsfilter zurücksetzen (alle Dateien anzeigen)",
@@ -192,11 +208,19 @@
         "PresetDataConfig": "📦 Daten & Konfiguration (*.json, *.xml, *.yaml, *.csv)",
         "PresetCode": "💻 Sämtlicher Code (*.ps1, *.sql, *.cs, *.py, *.js)",
         "PresetAllFiles": "🌐 Alle Dateien (*.*)",
+        "PresetOffice": "📈 Office & PDF (*.xlsx, *.docx, *.pdf, *.odt, *.ods, *.xls, *.doc)",
+        "PresetExcel": "📈 Nur Excel (*.xlsx, *.xlsm, *.xls)",
         "PresetAppendSql": "➕ *.sql anhängen",
         "PresetAppendJson": "➕ *.json anhängen",
         "PresetAppendXml": "➕ *.xml anhängen",
         "PresetAppendTxt": "➕ *.txt anhängen",
-        "PresetResetDefault": "↺ Auf Standard zurücksetzen (*.ps1, *.md)"
+        "PresetAppendXlsx": "➕ *.xlsx anhängen",
+        "PresetAppendDocx": "➕ *.docx anhängen",
+        "PresetAppendXls": "➕ *.xls anhängen",
+        "PresetAppendDoc": "➕ *.doc anhängen",
+        "PresetAppendPdf": "➕ *.pdf anhängen",
+        "PresetResetDefault": "↺ Auf Standard zurücksetzen (*.ps1, *.md)",
+        "PreviewOfficeNotice": "[Extrahierter Text — Datei für Formatierung öffnen]"
       }
     },
     "pl": {
@@ -218,6 +242,10 @@
         "TooltipWholeWord": "Dopasuj tylko całe słowa (np. 'DR' nie dopasuje 'poDRill')",
         "ChkSameLine": "Ta sama linia",
         "TooltipSameLine": "Wszystkie szukane frazy muszą występować w tej samej linii",
+        "ChkSkipFileName": "Pomiń nazwy",
+        "TooltipSkipFileName": "Nie dopasowuj fraz do nazw plików (szukaj tylko w zawartości)",
+        "ChkSkipFileContent": "Pomiń treść",
+        "TooltipSkipFileContent": "Nie przeszukuj zawartości plików (szukaj tylko w nazwach plików)",
         "LabelDateFilter": "Zmodyfikowane od:",
         "TooltipDateFilter": "Filtruj pliki zmodyfikowane od wybranej daty. Wyczyść datę, aby pokazać wszystkie pliki.",
         "TooltipClearDate": "Wyczyść filtr daty (pokaż wszystkie pliki)",
@@ -291,11 +319,19 @@
         "PresetDataConfig": "📦 Dane i konfiguracja (*.json, *.xml, *.yaml, *.csv)",
         "PresetCode": "💻 Kod źródłowy (*.ps1, *.sql, *.cs, *.py, *.js)",
         "PresetAllFiles": "🌐 Wszystkie pliki (*.*)",
+        "PresetOffice": "📈 Dokumenty Office i PDF (*.xlsx, *.docx, *.pdf, *.odt, *.ods, *.xls, *.doc)",
+        "PresetExcel": "📈 Tylko Excel (*.xlsx, *.xlsm, *.xls)",
         "PresetAppendSql": "➕ Dołącz *.sql",
         "PresetAppendJson": "➕ Dołącz *.json",
         "PresetAppendXml": "➕ Dołącz *.xml",
         "PresetAppendTxt": "➕ Dołącz *.txt",
-        "PresetResetDefault": "↺ Przywróć domyślne (*.ps1, *.md)"
+        "PresetAppendXlsx": "➕ Dołącz *.xlsx",
+        "PresetAppendDocx": "➕ Dołącz *.docx",
+        "PresetAppendXls": "➕ Dołącz *.xls",
+        "PresetAppendDoc": "➕ Dołącz *.doc",
+        "PresetAppendPdf": "➕ Dołącz *.pdf",
+        "PresetResetDefault": "↺ Przywróć domyślne (*.ps1, *.md)",
+        "PreviewOfficeNotice": "[Wyodrębniony tekst — otwórz plik, aby zobaczyć formatowanie]"
       }
     }
   }

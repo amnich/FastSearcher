@@ -6,9 +6,9 @@
 [![Encoding](https://img.shields.io/badge/Encoding-UTF--8%20with%20BOM-orange.svg)](https://en.wikipedia.org/wiki/Byte_order_mark)
 [![i18n](https://img.shields.io/badge/i18n-EN%20%7C%20DE%20%7C%20PL-teal.svg)](language.json)
 
-**FastSearcher** is an advanced, multi-threaded desktop search application built with PowerShell and WPF in modern Slate Dark Mode. It is designed to scan thousands of scripts, configuration files, and Markdown documents across directory structures (such as `D:\Skrypty`) in **300–600 milliseconds**.
+**FastSearcher** is an advanced, multi-threaded desktop search application built with PowerShell and WPF in modern Slate Dark Mode. It is designed to scan thousands of scripts, configuration files, Markdown documents, Office documents (Excel, Word, PowerPoint, OpenDocument, legacy XLS/DOC), and searchable PDF files across directory structures (such as `D:\Skrypty`) in **300–600 milliseconds**.
 
-Powered by an in-memory compiled C# parallel search engine ([FastSearchEngineV2](FastSearcher.ps1#L187-L341)), **FastSearcher** delivers instant `ALL` (AND) multi-phrase matching, digital signature filtering, hierarchical tree visualization, in-app syntax previewing with match jumping, dynamic extension presets, and full multi-language UI localization (English, German, and Polish).
+Powered by an in-memory compiled C# parallel search engine ([FastSearchEngineV2](FastSearcher.ps1#L198-L771)), **FastSearcher** delivers instant `ALL` (AND) multi-phrase matching, digital signature filtering, zero-dependency Office & PDF text extraction, hierarchical tree visualization, in-app syntax previewing with match jumping, dynamic extension presets, and full multi-language UI localization (English, German, and Polish).
 
 ---
 
@@ -39,6 +39,8 @@ Powered by an in-memory compiled C# parallel search engine ([FastSearchEngineV2]
 - **Exact Quoted Phrases & Whitespace Preservation**: Supports double (`"AD compare"`) and single (`'AD compare'`) quotes to treat phrases with spaces as atomic search terms. Leading and trailing whitespaces inside quotes (such as `" DR "` or `"dr "`) are **never trimmed**, allowing exact whitespace-delimited targeting.
 - **Whole Word Matching**: Dedicated `"Whole word"` checkbox (`chkWholeWord`) restricts search tokens to standalone words bounded by standard word boundaries (`\b` or non-alphanumeric/non-underscore characters). For example, searching `DR` will match `$DR = 1` or `DR test`, but will **not** match `poDRill` or `DR_test`.
 - **Same Line (Single Line) Matching**: Dedicated `"Same line"` checkbox (`chkSameLine`) restricts search results to files where **all entered search terms appear on the exact same line** (or in the file name). Uses an ultra-fast zero-allocation anchor scanner that checks candidate files without creating substring copies or array allocations.
+- **Skip File Name Search**: Dedicated `"Skip file name"` checkbox (`chkSkipFileName`) excludes file names from query matching, enforcing that all search tokens must exist within the file content.
+- **Skip Content Search**: Dedicated `"Skip content"` checkbox (`chkSkipFileContent`) skips reading and searching file content entirely, evaluating search tokens strictly against file names. This delivers instant, zero-I/O filename searches across tens of thousands of files.
 - **Typing Search Delay (Debounce)**: Automatic search execution waits for a configurable pause in typing (default **750 ms**, set via `config.json`). While typing, the status bar displays live feedback (`"Typing... search will start shortly"`), preventing premature searches in the middle of typing multi-word phrases. Pressing `Enter` runs the search immediately with zero delay.
 - **Punctuation Resilient**: Cleanses delimiters such as commas and semicolons outside quotes (e.g. `BC, user, compare`).
 - **Case-Insensitive**: Performs case-agnostic lookups (`StringComparison.OrdinalIgnoreCase`).
@@ -71,8 +73,10 @@ Powered by an in-memory compiled C# parallel search engine ([FastSearchEngineV2]
   - `🗄️ SQL Scripts (*.sql)`
   - `📦 Data & Config (*.json, *.xml, *.yaml, *.csv)`
   - `💻 All Code (*.ps1, *.sql, *.cs, *.py, *.js)`
+  - `📈 Office Docs (*.xlsx, *.docx, *.pptx, *.odt, *.ods, *.xls, *.doc, *.pdf)`
+  - `📈 Excel Only (*.xlsx, *.xlsm, *.xls)`
   - `🌐 All Files (*.*)`
-  - Quick append actions: `➕ Append *.sql`, `➕ Append *.json`, `➕ Append *.xml`, `➕ Append *.txt`.
+  - Quick append actions: `➕ Append *.sql`, `➕ Append *.json`, `➕ Append *.xml`, `➕ Append *.txt`, `➕ Append *.xlsx`, `➕ Append *.docx`, `➕ Append *.xls`, `➕ Append *.doc`, `➕ Append *.pdf`.
 - **All Files Toggle (`*.* All`)**: Quick switch button to toggle between full filesystem inspection (`*.*`) and previous specific extension masks.
 
 ### 5. Interactive Hierarchical TreeView (`FileNodeV2`)
@@ -87,6 +91,11 @@ Powered by an in-memory compiled C# parallel search engine ([FastSearchEngineV2]
   - 📊 Tabular Data (`.csv`, `.tsv`)
   - 💻 Source Code (`.cs`, `.py`, `.js`, `.ts`, `.cpp`, `.c`, `.h`)
   - ⚙️ Shell Scripts (`.bat`, `.cmd`, `.sh`)
+  - 📈 Excel Spreadsheets (`.xlsx`, `.xlsm`, `.xltx`, `.xls`)
+  - 📃 Word Documents (`.docx`, `.docm`, `.dotx`, `.doc`)
+  - 🎦 PowerPoint Presentations (`.pptx`, `.pptm`)
+  - 📑 OpenDocument Files (`.odt`, `.ods`, `.odp`, `.odg`)
+  - 📕 PDF Documents (`.pdf`)
   - 📄 Generic files
 - **Subtitles & Badges**: Each file node displays formatted file size (in KB) and last modification timestamp (`yyyy-MM-dd HH:mm`).
 - **Tree Expansion Control**: Dedicated `⊞ Expand` and `⊟ Collapse` buttons for global tree navigation.
@@ -97,13 +106,19 @@ Powered by an in-memory compiled C# parallel search engine ([FastSearchEngineV2]
 - **Persistent Selection**: Uses `IsInactiveSelectionHighlightEnabled="True"` so selection highlights remain clearly visible even when the preview box loses focus.
 - **Metadata Card**: Displays file name, extension tag, full directory path, file size, line count, and last write time.
 
-### 7. Multi-Language Localization (i18n)
+### 7. Zero-Dependency Office, OpenDocument, Legacy Binary & PDF Text Extraction
+- **Native .NET Engine**: Seamlessly searches inside ZIP-based Office files (`.xlsx`, `.xlsm`, `.xltx`, `.docx`, `.docm`, `.dotx`, `.pptx`, `.pptm`), OpenDocument formats (`.odt`, `.ods`, `.odp`, `.odg`), legacy binary OLE2 formats (`.xls`, `.doc`, `.ppt`), and searchable PDF files (`.pdf`) without requiring Microsoft Office, Adobe Acrobat, COM Interop, or third-party DLLs.
+- **XML, Binary & PDF Stream Extraction**: Built-in C# routines target internal XML files for modern archives, scan uncompressed compound streams for UTF-16LE and ANSI text runs in legacy files, and decompress `/FlateDecode` streams in PDF files via native `DeflateStream`, parsing standard PDF text operators (`Tj`, `TJ`, `'`, `"`).
+- **PDF Scope & Text Layer**: Targets digital text-layer PDFs (Word/Excel exports, system reports, invoices, electronic documentation). Scanned image-only PDFs requiring OCR are excluded to keep searches instantaneous.
+- **Plain-Text Preview**: When previewing any Office, OpenDocument, or PDF file, FastSearcher extracts readable text directly into the preview pane with an informative banner notice (`[Plain text extracted — open file for full formatting]`).
+
+### 8. Multi-Language Localization (i18n)
 - Powered by an external JSON translation catalog ([language.json](language.json)).
 - Supports **English (`en`)**, **German (`de`)**, and **Polish (`pl`)**.
 - Runtime switching via the `Language:` dropdown without requiring an application restart or clearing active search results.
 - Built-in fallback mechanism guarantees English defaults if custom keys are absent.
 
-### 8. Modern Slate Dark Theme & Windows DWM Integration
+### 9. Modern Slate Dark Theme & Windows DWM Integration
 - Crafted with a curated Slate Dark palette (`#0F172A`, `#1E293B`, `#2563EB`, `#38BDF8`).
 - Uses Windows DWM P/Invoke ([DwmWindowDarkHelper](FastSearcher.ps1#L47-L64)) to enable immersive dark title bars on Windows 10 (build 17763+) and Windows 11.
 
@@ -116,7 +131,7 @@ Powered by an in-memory compiled C# parallel search engine ([FastSearchEngineV2]
 ```mermaid
 flowchart TD
     UI[WPF XAML Window\nSlate Dark Theme] -->|User Input: Query, Extensions, Date| Controller[PowerShell Script Controller\nFastSearcher.ps1]
-    Controller -->|Debounce 400ms / Enter| Engine[Inlined C# Engine\nFastSearchEngineV2]
+    Controller -->|Debounce 750ms / Enter| Engine[Inlined C# Engine\nFastSearchEngineV2]
     Engine -->|Tokenize Query| Tokenizer[ParseTokens Regex]
     Engine -->|Enumerate & Filter| Scanner[Parallel.ForEach File Scanner]
     Scanner -->|Bypass # SIG # Block| SigFilter[Digital Signature Filter]
@@ -133,18 +148,21 @@ flowchart TD
 
 The script compiles specialized C# classes using `Add-Type` at startup:
 
-1. **[SearchResultItemV2](FastSearcher.ps1#L76-L83)**:
-   Represents an individual matching file with properties: `FullPath`, `FileName`, `RelativePath`, `Extension`, `Length`, and `LastWriteTime`.
-2. **[MatchLocationV2](FastSearcher.ps1#L85-L90)**:
-   Tracks token positions in text: `Index` (character offset), `Length` (token span), `LineNumber` (1-indexed line), and `Token` string.
-3. **[FileNodeV2](FastSearcher.ps1#L92-L185)**:
-   Builds the hierarchical directory tree. Contains `BuildTree()`, `GetOrCreateDirNode()`, and recursive directory-first alphabetical sorting (`SortRecursively()`).
-4. **[FastSearchEngineV2](FastSearcher.ps1#L187-L341)**:
-   - `ParseTokens(string query)`: Tokenizes queries with quote handling.
-   - `Search(string rootPath, string[] tokens, bool filter5Days, int daysFilter, string[] extensions)`: Executes multi-core parallel file scanning.
-   - `FindMatches(string content, string[] tokens)`: Computes line offsets and exact token match locations for the viewer.
-5. **[DwmWindowDarkHelper](FastSearcher.ps1#L51-L63)**:
+1. **[DwmWindowDarkHelper](FastSearcher.ps1#L52-L67)**:
    P/Invoke wrapper for `dwmapi.dll!DwmSetWindowAttribute` applying `DWMWA_USE_IMMERSIVE_DARK_MODE` (attribute `20` with fallback to `19`).
+2. **[SearchResultItemV2](FastSearcher.ps1#L83-L90)**:
+   Represents an individual matching file with properties: `FullPath`, `FileName`, `RelativePath`, `Extension`, `Length`, and `LastWriteTime`.
+3. **[MatchLocationV2](FastSearcher.ps1#L92-L97)**:
+   Tracks token positions in text: `Index` (character offset), `Length` (token span), `LineNumber` (1-indexed line), and `Token` string.
+4. **[FileNodeV2](FastSearcher.ps1#L99-L196)**:
+   Builds the hierarchical directory tree. Contains `BuildTree()`, `GetOrCreateDirNode()`, and recursive directory-first alphabetical sorting (`SortRecursively()`).
+5. **[FastSearchEngineV2](FastSearcher.ps1#L198-L771)**:
+   - `ParseTokens(string query)`: Tokenizes queries with quote handling.
+   - `ExtractTextFromOfficeFile(string filePath)`: Extracts searchable plain text from OOXML (`.xlsx`, `.docx`, `.pptx`), ODF (`.odt`, `.ods`, `.odp`), legacy binary formats (`.xls`, `.doc`, `.ppt`), and PDFs (`.pdf`).
+   - `ExtractTextFromLegacyBinaryFile(string filePath)`: Scans OLE2 compound files for UTF-16LE and 8-bit ANSI text sequences.
+   - `ExtractTextFromPdfFile(string filePath)`: Decompresses `/FlateDecode` streams via raw `DeflateStream` and extracts literal string tokens from PDF content streams.
+   - `Search(string rootPath, string[] tokens, ...)`: Executes multi-core parallel file scanning with signature block filtering, Office, and PDF text extraction.
+   - `FindMatches(string content, string[] tokens, ...)`: Computes line offsets and exact token match locations for the viewer.
 
 ---
 
@@ -155,7 +173,7 @@ The script compiles specialized C# classes using `Add-Type` at startup:
 | ⚡ FastSearcher  [Ultra-Fast Script & Markdown Search]             Ready (45 files / 312 ms)  [EN v] |
 +-------------------------------------------------------------------------------------------------------+
 | Folder:     [ D:\Skrypty                                     ] [📁 Browse...] [💾 Set Default] [📂 Open] |
-| Search:     [ BC "AD compare"       [x]] [ ] Whole word [ ] Same line  [🔍 Search (Enter) ] [↺ Reset]   |
+| Search:     [ BC "AD compare"  [x]] [ ] Whole [ ] Same line [ ] Skip name [ ] Skip cont [🔍 Search] [↺ Reset] |
 | Filters:    Modified: [ 2026-09-03 v][x][Presets v]   Extensions: [*.ps1, *.md    ] [Presets v] [*.* All] |
 +----------------------------------------+--------------------------------------------------------------+
 | Results (45 files)   [⊞ Expand] [⊟ Col]| ⚡ UserSync_NAV.ps1  [PS1]         [⚡ Open][💻 VS Code][📂 Dir] |
@@ -186,6 +204,8 @@ The script compiles specialized C# classes using `Add-Type` at startup:
 | **Clear Search** | `btnClearSearch` | Clears search input and triggers immediate refresh (`✕`). |
 | **Whole Word**   | `chkWholeWord` | Restricts matching to complete words bounded by `\b` (e.g. `DR` skips `poDRill`). |
 | **Same Line**    | `chkSameLine` | Restricts matching to files where all search terms appear on the same line. |
+| **Skip File Name**| `chkSkipFileName` | Excludes file names from match criteria (requires terms to appear in file content). |
+| **Skip Content** | `chkSkipFileContent`| Excludes file contents from search (matches terms against file names only). |
 | **Search Button** | `btnSearch` | Forces immediate search scan (`Enter`). |
 | **Reset Filters** | `btnReset` | Clears query, resets date filter to all files, unchecks whole word/same line, and resets extensions. |
 | **Modified Since**| `dpModifiedSince` | Dynamic DatePicker to filter files modified on or after chosen date (default: all files). |
@@ -240,6 +260,8 @@ The `Presets ▾` dropdown provides instant switching between curated file sets 
 | `BC AD compare` | 3 tokens: `[BC]`, `[AD]`, `[compare]` | File content or file name must contain **all 3 tokens** in any position. |
 | `BC "AD compare"` | 2 tokens: `[BC]`, `[AD compare]` | Must contain `BC` AND the exact phrase `"AD compare"`. |
 | `param folder` *(with Same line checked)* | 2 tokens: `[param]`, `[folder]` | Must contain both `param` and `folder` on the exact same line in the file. |
+| `Deploy` *(with Skip file name checked)* | 1 token: `[Deploy]` | Matches only if `Deploy` exists in file content; ignores hits occurring only in the file name. |
+| `Backup` *(with Skip content checked)* | 1 token: `[Backup]` | Matches only if `Backup` is in the file name; does not inspect file content. |
 | `" DR "` | 1 token: `[ DR ]` | Preserves leading/trailing spaces inside quotes; matches occurrences with whitespace boundaries. |
 | `"dr "` | 1 token: `[dr ]` | Preserves trailing space; matches `dr ` (e.g. `# Call dr now`) while skipping words like `draft`. |
 | `DR` *(with Whole Word checked)* | 1 token: `[DR]` | Matches whole words only; matches `$DR = 1` or `DR test`, but excludes `poDRill` and `DR_test`. |
@@ -308,6 +330,8 @@ The application automatically loads and persists state in [config.json](config.j
 | `LastSearchQuery` | `string` | `""` | Preserves the most recent query string between sessions. |
 | `MatchWholeWord` | `bool` | `false` | When true, restricts matches to whole words bounded by word boundaries. |
 | `MatchSameLine` | `bool` | `false` | When true, requires all search phrases to appear on the same line. |
+| `SkipFileName` | `bool` | `false` | When true, excludes file names from query matching (content only). |
+| `SkipFileContent`| `bool` | `false` | When true, excludes file contents from search (file name only). |
 | `SearchDebounceMs` | `int` | `750` | Typing delay (milliseconds) before starting search automatically. |
 | `AutoExpandTree` | `bool` | `true` | Automatically expands matched tree branches upon search completion. |
 | `FontSize` | `int` | `13` | Base font size for editor preview. |
@@ -348,9 +372,10 @@ The UI is completely separated from hardcoded strings via [language.json](langua
 ```
 
 ### Key Functions
-- [Import-LanguageCatalog](FastSearcher.ps1#L426-L467): Loads the JSON catalog into `$script:LanguagesCatalog` at startup and establishes fallback defaults.
-- [Set-UiLanguage](FastSearcher.ps1#L995-L1059): Re-labels all window titles, buttons, tooltips, context menus, and empty state cards dynamically in memory.
-- [Get-UiString](FastSearcher.ps1#L471-L475): Helper function returning the localized string or fallback text.
+- [Import-LanguageCatalog](FastSearcher.ps1#L889-L930): Loads the JSON catalog into `$script:LanguagesCatalog` at startup and establishes fallback defaults.
+- [Get-UiString](FastSearcher.ps1#L934-L938): Helper function returning the localized string or fallback text.
+- [Set-UiLanguage](FastSearcher.ps1#L1827-L1891): Re-labels all window titles, buttons, tooltips, context menus, and empty state cards dynamically in memory.
+- [Show-FilePreview](FastSearcher.ps1#L1943-L2070): Loads content into the preview box, extracts Office text if applicable, and highlights query matches.
 
 ---
 

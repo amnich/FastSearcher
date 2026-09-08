@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     FastSearcher — Advanced, ultra-fast search tool for PowerShell (.ps1) and Markdown (.md) scripts.
@@ -42,7 +42,7 @@ if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne [System.Thr
 Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force -ErrorAction SilentlyContinue
 
 # ── 2. Load GUI libraries and Windows DWM Dark Mode ──────────────────────────
-Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms, System.Drawing
+Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms, System.Drawing, System.IO.Compression, System.IO.Compression.FileSystem
 
 # DWM Dark Mode for the window title bar in Windows 10/11
 if (-not ([System.Management.Automation.PSTypeName]'DwmWindowDarkHelper').Type) {
@@ -73,9 +73,11 @@ if (-not ([System.Management.Automation.PSTypeName]'FastSearchEngineV2').Type) {
     $csharpEngine = @"
 using System;
 using System.IO;
+using System.IO.Compression;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using System.Text;
 using System.Text.RegularExpressions;
 
 public class SearchResultItemV2 {
@@ -140,6 +142,11 @@ public class FileNodeV2 {
             else if (ext == ".csv" || ext == ".tsv") fileNode.Icon = "📊";
             else if (ext == ".cs" || ext == ".py" || ext == ".js" || ext == ".ts" || ext == ".cpp" || ext == ".c" || ext == ".h") fileNode.Icon = "💻";
             else if (ext == ".bat" || ext == ".cmd" || ext == ".sh") fileNode.Icon = "⚙️";
+            else if (ext == ".xlsx" || ext == ".xlsm" || ext == ".xltx" || ext == ".xls") fileNode.Icon = "📈";
+            else if (ext == ".docx" || ext == ".docm" || ext == ".dotx" || ext == ".doc") fileNode.Icon = "📃";
+            else if (ext == ".pptx" || ext == ".pptm") fileNode.Icon = "🎦";
+            else if (ext == ".odt" || ext == ".ods" || ext == ".odp" || ext == ".odg") fileNode.Icon = "📑";
+            else if (ext == ".pdf") fileNode.Icon = "📕";
             else fileNode.Icon = "📄";
             fileNode.Subtitle = string.Format("{0:N0} KB | {1:yyyy-MM-dd HH:mm}", file.Length / 1024.0, file.LastWriteTime);
             fileNode.IsExpanded = false;
@@ -190,6 +197,471 @@ public class FileNodeV2 {
 }
 
 public class FastSearchEngineV2 {
+
+    // ── Office-format text extraction (OOXML + ODF + Legacy OLE2) ───────────
+    // Supported:
+    //   OOXML:  .xlsx/.xlsm/.xltx, .docx/.docm/.dotx, .pptx/.pptm
+    //   ODF:    .odt/.ods/.odp/.odg/.ott/.otp/.ots
+    //   Legacy: .doc/.dot, .xls/.xlt, .ppt/.pot
+    private static readonly HashSet<string> OoxmlExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+        ".xlsx", ".xlsm", ".xltx",
+        ".docx", ".docm", ".dotx",
+        ".pptx", ".pptm"
+    };
+    private static readonly HashSet<string> OdfExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+        ".odt", ".ods", ".odp", ".odg", ".ott", ".otp", ".ots"
+    };
+    private static readonly HashSet<string> LegacyExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+        ".doc", ".dot",
+        ".xls", ".xlt",
+        ".ppt", ".pot"
+    };
+    private static readonly HashSet<string> PdfExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+        ".pdf"
+    };
+
+    /// <summary>
+    /// Returns true if the file extension is an Office or PDF format (OOXML, ODF, legacy OLE2, PDF) that we can extract text from.
+    /// </summary>
+    public static bool IsOfficeFormat(string extension) {
+        return OoxmlExtensions.Contains(extension) || OdfExtensions.Contains(extension) || LegacyExtensions.Contains(extension) || PdfExtensions.Contains(extension);
+    }
+
+    /// <summary>
+    /// Extracts searchable plain text from an OOXML, ODF, legacy OLE2, or PDF document.
+    /// Returns null if the file cannot be processed.
+    /// </summary>
+    public static string ExtractTextFromOfficeFile(string filePath) {
+        string ext = Path.GetExtension(filePath);
+        if (PdfExtensions.Contains(ext)) {
+            return ExtractTextFromPdfFile(filePath);
+        }
+        if (LegacyExtensions.Contains(ext)) {
+            return ExtractTextFromLegacyBinaryFile(filePath);
+        }
+
+        bool isOoxml = OoxmlExtensions.Contains(ext);
+        bool isOdf   = OdfExtensions.Contains(ext);
+        if (!isOoxml && !isOdf) return null;
+
+        var parts = new StringBuilder();
+
+        try {
+            using (var stream = File.OpenRead(filePath))
+            using (var zip = new ZipArchive(stream, ZipArchiveMode.Read)) {
+
+                if (isOoxml) {
+                    // ── OOXML: determine sub-format by examining entries
+                    bool hasXl   = false;
+                    bool hasWord = false;
+                    bool hasPpt  = false;
+                    foreach (var entry in zip.Entries) {
+                        string n = entry.FullName;
+                        if (n.StartsWith("xl/",   StringComparison.OrdinalIgnoreCase)) { hasXl   = true; }
+                        if (n.StartsWith("word/", StringComparison.OrdinalIgnoreCase)) { hasWord = true; }
+                        if (n.StartsWith("ppt/",  StringComparison.OrdinalIgnoreCase)) { hasPpt  = true; }
+                    }
+
+                    foreach (var entry in zip.Entries) {
+                        string n = entry.FullName;
+                        bool include = false;
+
+                        if (hasXl) {
+                            // sharedStrings contains all string cell values;
+                            // worksheets contain numeric/formula cells via <v> tags
+                            include = Regex.IsMatch(n, @"^xl/sharedStrings\.xml$|^xl/worksheets/sheet\d+\.xml$",
+                                                    RegexOptions.IgnoreCase);
+                        } else if (hasWord) {
+                            include = Regex.IsMatch(n, @"^word/(document|header\d*|footer\d*)\.xml$",
+                                                    RegexOptions.IgnoreCase);
+                        } else if (hasPpt) {
+                            include = Regex.IsMatch(n, @"^ppt/(slides/slide|notesSlides/notesSlide)\d+\.xml$",
+                                                    RegexOptions.IgnoreCase);
+                        }
+
+                        if (!include) continue;
+                        AppendXmlText(zip, entry, parts);
+                    }
+                } else {
+                    // ── ODF: single content.xml holds all text
+                    foreach (var entry in zip.Entries) {
+                        if (string.Equals(entry.FullName, "content.xml", StringComparison.OrdinalIgnoreCase)) {
+                            AppendXmlText(zip, entry, parts);
+                            break;
+                        }
+                    }
+                }
+            }
+        } catch {
+            // Corrupt file, password-protected, or not actually a ZIP — skip gracefully
+            return null;
+        }
+
+        return parts.Length > 0 ? parts.ToString() : null;
+    }
+
+    /// <summary>Reads a ZIP entry, strips XML tags, appends readable text to the buffer.</summary>
+    private static void AppendXmlText(ZipArchive zip, ZipArchiveEntry entry, StringBuilder sb) {
+        try {
+            using (var es = entry.Open())
+            using (var sr = new StreamReader(es, Encoding.UTF8, detectEncodingFromByteOrderMarks: true)) {
+                string xml = sr.ReadToEnd();
+                // Remove XML tags; collapse whitespace to single spaces
+                string plain = Regex.Replace(xml, "<[^>]+>", " ");
+                plain = Regex.Replace(plain, @"&amp;",  "&");
+                plain = Regex.Replace(plain, @"&lt;",   "<");
+                plain = Regex.Replace(plain, @"&gt;",   ">");
+                plain = Regex.Replace(plain, @"&quot;", "\"");
+                plain = Regex.Replace(plain, @"&apos;", "'");
+                plain = Regex.Replace(plain, @"\s+", " ").Trim();
+                if (plain.Length > 0) {
+                    sb.Append(plain);
+                    sb.Append("\n");
+                }
+            }
+        } catch { /* single corrupt entry — continue */ }
+    }
+
+    private static bool IsLatinChar(char c) {
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') return true;
+        if (c >= 0x20 && c <= 0x7E) return true; // Basic Latin / ASCII printable
+        if (c >= 0x00A0 && c <= 0x024F) return true; // Latin-1 Supplement, Latin Extended A & B (covers Polish, German, French, etc.)
+        if (c >= 0x2010 && c <= 0x2026) return true; // Quotes, dashes, ellipsis
+        if (c == 0x20AC || c == 0x2116) return true; // Euro, numero
+        return false;
+    }
+
+    private static bool IsAsciiPrintable(byte b) {
+        if (b == 0x20 || b == 0x09 || b == 0x0D || b == 0x0A) return true;
+        return (b >= 0x21 && b <= 0x7E);
+    }
+
+    /// <summary>
+    /// Zero-dependency text extractor for legacy binary formats (DOC, XLS, PPT).
+    /// Scans OLE2 compound byte streams for runs of valid UTF-16LE and 8-bit ANSI text.
+    /// </summary>
+    public static string ExtractTextFromLegacyBinaryFile(string filePath) {
+        if (!File.Exists(filePath)) return null;
+        try {
+            byte[] bytes = File.ReadAllBytes(filePath);
+            if (bytes.Length < 8) return null;
+
+            var sb = new StringBuilder();
+            int len = bytes.Length;
+            int i = 0;
+            var buf = new StringBuilder();
+            Encoding enc1250;
+            try { enc1250 = Encoding.GetEncoding(1250); } catch { enc1250 = Encoding.Default; }
+
+            while (i < len) {
+                // 1. Try UTF-16LE run at current offset i
+                if (i + 1 < len) {
+                    char c = (char)(bytes[i] | (bytes[i + 1] << 8));
+                    if (IsLatinChar(c)) {
+                        int start = i;
+                        buf.Clear();
+                        int letterOrDigit = 0;
+                        while (i + 1 < len) {
+                            char uc = (char)(bytes[i] | (bytes[i + 1] << 8));
+                            if (IsLatinChar(uc)) {
+                                buf.Append(uc);
+                                if (char.IsLetterOrDigit(uc)) letterOrDigit++;
+                                i += 2;
+                            } else {
+                                break;
+                            }
+                        }
+                        if (buf.Length >= 3 && letterOrDigit >= 2) {
+                            string s = buf.ToString().Trim();
+                            if (s.Length > 0) {
+                                if (sb.Length > 0) sb.Append(' ');
+                                sb.Append(s);
+                            }
+                            continue;
+                        }
+                        i = start;
+                    }
+                }
+
+                // 2. Try 8-bit ANSI run at current offset i
+                byte b = bytes[i];
+                if (IsAsciiPrintable(b) || (b >= 0x80 && b <= 0xFE)) {
+                    int start = i;
+                    int letterOrDigit = 0;
+                    while (i < len) {
+                        byte ab = bytes[i];
+                        if (IsAsciiPrintable(ab) || (ab >= 0x80 && ab <= 0xFE)) {
+                            if ((ab >= 0x30 && ab <= 0x39) || (ab >= 0x41 && ab <= 0x5A) || (ab >= 0x61 && ab <= 0x7A) || ab >= 0x80) {
+                                letterOrDigit++;
+                            }
+                            i++;
+                        } else {
+                            break;
+                        }
+                    }
+                    int runLen = i - start;
+                    if (runLen >= 3 && letterOrDigit >= 2) {
+                        string s = enc1250.GetString(bytes, start, runLen).Trim();
+                        if (s.Length > 0) {
+                            if (sb.Length > 0) sb.Append(' ');
+                            sb.Append(s);
+                        }
+                        continue;
+                    }
+                    i = start;
+                }
+
+                i++;
+            }
+
+            return sb.Length > 0 ? sb.ToString() : null;
+        } catch {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Zero-dependency text extractor for searchable PDF files.
+    /// Decompresses /FlateDecode streams using DeflateStream and parses PDF text operators (Tj, TJ).
+    /// </summary>
+    public static string ExtractTextFromPdfFile(string filePath) {
+        if (!File.Exists(filePath)) return null;
+        try {
+            byte[] bytes = File.ReadAllBytes(filePath);
+            if (bytes.Length < 10) return null;
+
+            // Check PDF magic header: %PDF-
+            if (bytes[0] != '%' || bytes[1] != 'P' || bytes[2] != 'D' || bytes[3] != 'F') {
+                return null;
+            }
+
+            var sb = new StringBuilder();
+            int len = bytes.Length;
+            int i = 0;
+
+            byte[] streamMarker = Encoding.ASCII.GetBytes("stream");
+            byte[] endStreamMarker = Encoding.ASCII.GetBytes("endstream");
+
+            while (i < len - 10) {
+                int streamIdx = IndexOfBytes(bytes, streamMarker, i);
+                if (streamIdx < 0) break;
+
+                int dictSearchStart = Math.Max(0, streamIdx - 1024);
+                string dictHeader = Encoding.ASCII.GetString(bytes, dictSearchStart, streamIdx - dictSearchStart);
+                bool isFlate = dictHeader.IndexOf("/FlateDecode", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                int contentStart = streamIdx + 6;
+                if (contentStart < len && bytes[contentStart] == '\r') contentStart++;
+                if (contentStart < len && bytes[contentStart] == '\n') contentStart++;
+
+                int endIdx = IndexOfBytes(bytes, endStreamMarker, contentStart);
+                if (endIdx < 0) break;
+
+                int contentEnd = endIdx;
+                while (contentEnd > contentStart && (bytes[contentEnd - 1] == '\r' || bytes[contentEnd - 1] == '\n')) {
+                    contentEnd--;
+                }
+
+                int streamLen = contentEnd - contentStart;
+                if (streamLen > 0) {
+                    byte[] decompressed = null;
+                    if (isFlate) {
+                        decompressed = DecompressPdfFlate(bytes, contentStart, streamLen);
+                    } else {
+                        decompressed = new byte[streamLen];
+                        Buffer.BlockCopy(bytes, contentStart, decompressed, 0, streamLen);
+                    }
+
+                    if (decompressed != null && decompressed.Length > 0) {
+                        ExtractTextFromPdfStream(decompressed, sb);
+                    }
+                }
+
+                i = endIdx + 9;
+            }
+
+            return sb.Length > 0 ? sb.ToString() : null;
+        } catch {
+            return null;
+        }
+    }
+
+    private static int IndexOfBytes(byte[] source, byte[] pattern, int startIndex) {
+        if (source == null || pattern == null || startIndex < 0) return -1;
+        int max = source.Length - pattern.Length;
+        for (int i = startIndex; i <= max; i++) {
+            bool match = true;
+            for (int j = 0; j < pattern.Length; j++) {
+                if (source[i + j] != pattern[j]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) return i;
+        }
+        return -1;
+    }
+
+    private static byte[] DecompressPdfFlate(byte[] data, int offset, int length) {
+        if (length < 2) return null;
+        try {
+            int streamOffset = offset;
+            int streamLength = length;
+            if (data[offset] == 0x78) {
+                streamOffset += 2;
+                streamLength -= 2;
+            }
+
+            if (streamLength > 4 && data[offset] == 0x78) {
+                streamLength -= 4;
+            }
+
+            using (var msInput = new MemoryStream(data, streamOffset, streamLength))
+            using (var deflate = new DeflateStream(msInput, CompressionMode.Decompress))
+            using (var msOutput = new MemoryStream()) {
+                byte[] buf = new byte[8192];
+                int read;
+                while ((read = deflate.Read(buf, 0, buf.Length)) > 0) {
+                    msOutput.Write(buf, 0, read);
+                    if (msOutput.Length > 20 * 1024 * 1024) break;
+                }
+                return msOutput.ToArray();
+            }
+        } catch {
+            return null;
+        }
+    }
+
+    private static void ExtractTextFromPdfStream(byte[] streamBytes, StringBuilder sb) {
+        int len = streamBytes.Length;
+        int i = 0;
+
+        while (i < len) {
+            if (streamBytes[i] == '(') {
+                int depth = 1;
+                var strBuf = new StringBuilder();
+                i++;
+                while (i < len && depth > 0) {
+                    if (streamBytes[i] == '\\' && i + 1 < len) {
+                        i++;
+                        byte esc = streamBytes[i];
+                        if (esc == 'n') strBuf.Append('\n');
+                        else if (esc == 'r') strBuf.Append('\r');
+                        else if (esc == 't') strBuf.Append('\t');
+                        else if (esc == '(') strBuf.Append('(');
+                        else if (esc == ')') strBuf.Append(')');
+                        else if (esc == '\\') strBuf.Append('\\');
+                        else strBuf.Append((char)esc);
+                    } else if (streamBytes[i] == '(') {
+                        depth++;
+                        strBuf.Append('(');
+                    } else if (streamBytes[i] == ')') {
+                        depth--;
+                        if (depth > 0) strBuf.Append(')');
+                    } else {
+                        strBuf.Append((char)streamBytes[i]);
+                    }
+                    i++;
+                }
+
+                if (strBuf.Length > 0) {
+                    int nextOp = SkipPdfWhitespace(streamBytes, i);
+                    if (nextOp < len && IsPdfTextOp(streamBytes, nextOp)) {
+                        if (sb.Length > 0) sb.Append(' ');
+                        sb.Append(strBuf.ToString());
+                    }
+                }
+                continue;
+            }
+
+            if (streamBytes[i] == '[') {
+                i++;
+                var arrBuf = new StringBuilder();
+                while (i < len && streamBytes[i] != ']') {
+                    if (streamBytes[i] == '(') {
+                        int depth = 1;
+                        i++;
+                        while (i < len && depth > 0) {
+                            if (streamBytes[i] == '\\' && i + 1 < len) {
+                                i++;
+                                byte esc = streamBytes[i];
+                                if (esc == 'n') arrBuf.Append('\n');
+                                else if (esc == 'r') arrBuf.Append('\r');
+                                else if (esc == 't') arrBuf.Append('\t');
+                                else if (esc == '(') arrBuf.Append('(');
+                                else if (esc == ')') arrBuf.Append(')');
+                                else if (esc == '\\') arrBuf.Append('\\');
+                                else arrBuf.Append((char)esc);
+                            } else if (streamBytes[i] == '(') {
+                                depth++;
+                                arrBuf.Append('(');
+                            } else if (streamBytes[i] == ')') {
+                                depth--;
+                                if (depth > 0) arrBuf.Append(')');
+                            } else {
+                                arrBuf.Append((char)streamBytes[i]);
+                            }
+                            i++;
+                        }
+                    } else if (streamBytes[i] == '<') {
+                        i++;
+                        var hexBuf = new StringBuilder();
+                        while (i < len && streamBytes[i] != '>') {
+                            char hc = (char)streamBytes[i];
+                            if (IsPdfHex(hc)) hexBuf.Append(hc);
+                            i++;
+                        }
+                        if (hexBuf.Length >= 2) {
+                            string h = hexBuf.ToString();
+                            for (int hx = 0; hx + 1 < h.Length; hx += 2) {
+                                try {
+                                    int bVal = Convert.ToInt32(h.Substring(hx, 2), 16);
+                                    if (bVal >= 32 && bVal <= 126) arrBuf.Append((char)bVal);
+                                } catch {}
+                            }
+                        }
+                        if (i < len && streamBytes[i] == '>') i++;
+                    } else {
+                        if (streamBytes[i] == '-' && i + 3 < len) {
+                            arrBuf.Append(' ');
+                        }
+                        i++;
+                    }
+                }
+
+                if (arrBuf.Length > 0) {
+                    if (i < len && streamBytes[i] == ']') i++;
+                    int nextOp = SkipPdfWhitespace(streamBytes, i);
+                    if (nextOp < len && (streamBytes[nextOp] == 'T' || streamBytes[nextOp] == 't')) {
+                        if (sb.Length > 0) sb.Append(' ');
+                        sb.Append(arrBuf.ToString());
+                    }
+                }
+                continue;
+            }
+
+            i++;
+        }
+    }
+
+    private static int SkipPdfWhitespace(byte[] data, int idx) {
+        while (idx < data.Length && (data[idx] == ' ' || data[idx] == '\t' || data[idx] == '\r' || data[idx] == '\n')) {
+            idx++;
+        }
+        return idx;
+    }
+
+    private static bool IsPdfTextOp(byte[] data, int idx) {
+        if (idx >= data.Length) return false;
+        if (data[idx] == '\'' || data[idx] == '"') return true;
+        if (data[idx] == 'T' && idx + 1 < data.Length && (data[idx + 1] == 'j' || data[idx + 1] == 'J')) return true;
+        return false;
+    }
+
+    private static bool IsPdfHex(char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    }
+
     public static string[] ParseTokens(string query) {
         if (string.IsNullOrWhiteSpace(query)) return new string[0];
         var tokens = new List<string>();
@@ -335,10 +807,14 @@ public class FastSearchEngineV2 {
         return false;
     }
 
-    public static List<SearchResultItemV2> Search(string rootPath, string[] tokens, bool filterByDate, DateTime minDate, string[] extensions, bool matchWholeWord, bool matchSameLine) {
+    public static List<SearchResultItemV2> Search(string rootPath, string[] tokens, bool filterByDate, DateTime minDate, string[] extensions, bool matchWholeWord, bool matchSameLine, bool skipFileName, bool skipFileContent) {
         var results = new ConcurrentBag<SearchResultItemV2>();
         if (string.IsNullOrWhiteSpace(rootPath) || !Directory.Exists(rootPath)) {
             return new List<SearchResultItemV2>();
+        }
+
+        if (skipFileName && skipFileContent) {
+            skipFileContent = false;
         }
 
         if (extensions == null || extensions.Length == 0) {
@@ -387,39 +863,67 @@ public class FastSearchEngineV2 {
                 }
 
                 if (hasTokens) {
-                    if (fileInfo.Length > 25 * 1024 * 1024) {
-                        return;
-                    }
-                    string content = File.ReadAllText(file);
-                    // Remove the certificate / digital signature block to avoid false base64 matches
-                    int sigIdx = content.IndexOf("# SIG # Begin signature block", StringComparison.OrdinalIgnoreCase);
-                    string searchContent = (sigIdx >= 0) ? content.Substring(0, sigIdx) : content;
-
-                    // "ALL" condition - every given token must occur in the file (content or file name)
-                    for (int i = 0; i < tokens.Length; i++) {
-                        bool inContent = matchWholeWord
-                            ? ContainsWholeWord(searchContent, tokens[i])
-                            : searchContent.IndexOf(tokens[i], StringComparison.OrdinalIgnoreCase) >= 0;
-                        bool inName = matchWholeWord
-                            ? ContainsWholeWord(fileInfo.Name, tokens[i])
-                            : fileInfo.Name.IndexOf(tokens[i], StringComparison.OrdinalIgnoreCase) >= 0;
-                        if (!inContent && !inName) {
-                            return;
-                        }
-                    }
-
-                    if (matchSameLine && tokens.Length > 1) {
-                        // Check if file name contains all tokens
-                        bool nameHasAll = true;
+                    if (skipFileContent) {
                         for (int i = 0; i < tokens.Length; i++) {
                             bool inName = matchWholeWord
                                 ? ContainsWholeWord(fileInfo.Name, tokens[i])
                                 : fileInfo.Name.IndexOf(tokens[i], StringComparison.OrdinalIgnoreCase) >= 0;
-                            if (!inName) { nameHasAll = false; break; }
-                        }
-                        if (!nameHasAll) {
-                            if (!ContainsTokensOnSameLine(searchContent, tokens, matchWholeWord)) {
+                            if (!inName) {
                                 return;
+                            }
+                        }
+                    } else {
+                        if (fileInfo.Length > 25 * 1024 * 1024) {
+                            return;
+                        }
+
+                        string content;
+                        string fileExt = fileInfo.Extension;
+
+                        if (IsOfficeFormat(fileExt)) {
+                            // Extract text from ZIP-based Office format (OOXML/ODF) or PDF
+                            content = ExtractTextFromOfficeFile(file);
+                            if (content == null) {
+                                // Not extractable — match by file name only if tokens present
+                                content = string.Empty;
+                            }
+                        } else {
+                            content = File.ReadAllText(file);
+                        }
+
+                        // Remove the certificate / digital signature block to avoid false base64 matches
+                        int sigIdx = content.IndexOf("# SIG # Begin signature block", StringComparison.OrdinalIgnoreCase);
+                        string searchContent = (sigIdx >= 0) ? content.Substring(0, sigIdx) : content;
+
+                        // "ALL" condition - every given token must occur in the file (content or file name)
+                        for (int i = 0; i < tokens.Length; i++) {
+                            bool inContent = matchWholeWord
+                                ? ContainsWholeWord(searchContent, tokens[i])
+                                : searchContent.IndexOf(tokens[i], StringComparison.OrdinalIgnoreCase) >= 0;
+                            bool inName = !skipFileName && (matchWholeWord
+                                ? ContainsWholeWord(fileInfo.Name, tokens[i])
+                                : fileInfo.Name.IndexOf(tokens[i], StringComparison.OrdinalIgnoreCase) >= 0);
+                            if (!inContent && !inName) {
+                                return;
+                            }
+                        }
+
+                        if (matchSameLine && tokens.Length > 1) {
+                            // Check if file name contains all tokens
+                            bool nameHasAll = false;
+                            if (!skipFileName) {
+                                nameHasAll = true;
+                                for (int i = 0; i < tokens.Length; i++) {
+                                    bool inName = matchWholeWord
+                                        ? ContainsWholeWord(fileInfo.Name, tokens[i])
+                                        : fileInfo.Name.IndexOf(tokens[i], StringComparison.OrdinalIgnoreCase) >= 0;
+                                    if (!inName) { nameHasAll = false; break; }
+                                }
+                            }
+                            if (!nameHasAll) {
+                                if (!ContainsTokensOnSameLine(searchContent, tokens, matchWholeWord)) {
+                                    return;
+                                }
                             }
                         }
                     }
@@ -443,6 +947,10 @@ public class FastSearchEngineV2 {
         var res = new List<SearchResultItemV2>(results);
         res.Sort((a, b) => string.Compare(a.RelativePath, b.RelativePath, StringComparison.OrdinalIgnoreCase));
         return res;
+    }
+
+    public static List<SearchResultItemV2> Search(string rootPath, string[] tokens, bool filterByDate, DateTime minDate, string[] extensions, bool matchWholeWord, bool matchSameLine) {
+        return Search(rootPath, tokens, filterByDate, minDate, extensions, matchWholeWord, matchSameLine, false, false);
     }
 
     public static List<SearchResultItemV2> Search(string rootPath, string[] tokens, bool filterByDate, DateTime minDate, string[] extensions, bool matchWholeWord) {
@@ -540,7 +1048,11 @@ public class FastSearchEngineV2 {
     }
 }
 "@
-    Add-Type -TypeDefinition $csharpEngine -Language CSharp
+    if ($PSVersionTable.PSVersion.Major -le 5) {
+        Add-Type -TypeDefinition $csharpEngine -ReferencedAssemblies 'System.IO.Compression', 'System.Xml', 'System.Core' -Language CSharp
+    } else {
+        Add-Type -TypeDefinition $csharpEngine -Language CSharp
+    }
 }
 
 # ── 4. Configuration and Persistence (config.json) ──────────────────────────
@@ -570,6 +1082,8 @@ function Get-AppConfig {
         Language                = 'en'
         MatchWholeWord          = $false
         MatchSameLine           = $false
+        SkipFileName            = $false
+        SkipFileContent         = $false
         SearchDebounceMs        = 750
     }
 
@@ -589,6 +1103,8 @@ function Get-AppConfig {
             if ($saved.Language) { $cfg.Language = [string]$saved.Language }
             if ($null -ne $saved.MatchWholeWord) { $cfg.MatchWholeWord = [bool]$saved.MatchWholeWord }
             if ($null -ne $saved.MatchSameLine) { $cfg.MatchSameLine = [bool]$saved.MatchSameLine }
+            if ($null -ne $saved.SkipFileName) { $cfg.SkipFileName = [bool]$saved.SkipFileName }
+            if ($null -ne $saved.SkipFileContent) { $cfg.SkipFileContent = [bool]$saved.SkipFileContent }
             if ($saved.SearchDebounceMs) { $cfg.SearchDebounceMs = [int]$saved.SearchDebounceMs }
             if ($saved.Theme -and $saved.Theme -in @('Dark','Light')) { $cfg.Theme = [string]$saved.Theme }
         } catch {
@@ -610,6 +1126,8 @@ function Save-AppConfig {
         [string]$Theme = '',
         [bool]$MatchWholeWord = $false,
         [bool]$MatchSameLine = $false,
+        [bool]$SkipFileName = $false,
+        [bool]$SkipFileContent = $false,
         [int]$SearchDebounceMs = 0
     )
     $langToSave     = if ($Language)         { $Language }         elseif ($script:Config -and $script:Config.Language)  { $script:Config.Language }  else { 'en' }
@@ -629,6 +1147,8 @@ function Save-AppConfig {
         Language                = $langToSave
         MatchWholeWord          = $MatchWholeWord
         MatchSameLine           = $MatchSameLine
+        SkipFileName            = $SkipFileName
+        SkipFileContent         = $SkipFileContent
         SearchDebounceMs        = $debounceToSave
     }
     try {
@@ -1067,8 +1587,12 @@ function Get-UiString {
                     <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="4,0,8,0">
                         <CheckBox Name="chkWholeWord" Content="Whole word" VerticalAlignment="Center" Margin="0,0,10,0"
                                   FontSize="12" ToolTip="Match whole words only (e.g. 'DR' will not match 'poDRill')"/>
-                        <CheckBox Name="chkSameLine" Content="Same line" VerticalAlignment="Center" Margin="0,0,4,0"
+                        <CheckBox Name="chkSameLine" Content="Same line" VerticalAlignment="Center" Margin="0,0,10,0"
                                   FontSize="12" ToolTip="All search phrases must appear on the same line"/>
+                        <CheckBox Name="chkSkipFileName" Content="Skip file name" VerticalAlignment="Center" Margin="0,0,10,0"
+                                  FontSize="12" ToolTip="Exclude file names from search (search content only)"/>
+                        <CheckBox Name="chkSkipFileContent" Content="Skip content" VerticalAlignment="Center" Margin="0,0,4,0"
+                                  FontSize="12" ToolTip="Exclude file contents from search (search file names only)"/>
                     </StackPanel>
                     <Button Name="btnSearch" Grid.Column="3" Content="🔍 Search (Enter)" Height="30" Padding="16,4" FontWeight="Bold" Margin="0,0,4,0"/>
                     <Button Name="btnReset"  Grid.Column="4" Content="↺ Reset" Background="{DynamicResource BtnSecondary}" Foreground="{DynamicResource TextPrimary}" Height="30" Padding="10,4"/>
@@ -1287,6 +1811,8 @@ $txtSearch           = $window.FindName("txtSearch")
 $btnClearSearch      = $window.FindName("btnClearSearch")
 $chkWholeWord        = $window.FindName("chkWholeWord")
 $chkSameLine         = $window.FindName("chkSameLine")
+$chkSkipFileName     = $window.FindName("chkSkipFileName")
+$chkSkipFileContent  = $window.FindName("chkSkipFileContent")
 $btnSearch           = $window.FindName("btnSearch")
 $btnReset            = $window.FindName("btnReset")
 
@@ -1560,6 +2086,16 @@ if ($null -ne $script:Config.MatchSameLine) {
 } else {
     $chkSameLine.IsChecked = $false
 }
+if ($null -ne $script:Config.SkipFileName) {
+    $chkSkipFileName.IsChecked = [bool]$script:Config.SkipFileName
+} else {
+    $chkSkipFileName.IsChecked = $false
+}
+if ($null -ne $script:Config.SkipFileContent) {
+    $chkSkipFileContent.IsChecked = [bool]$script:Config.SkipFileContent
+} else {
+    $chkSkipFileContent.IsChecked = $false
+}
 
 # Populate the language selector from the loaded catalog
 foreach ($code in $script:LanguagesCatalog.Keys) {
@@ -1619,6 +2155,14 @@ function Set-UiLanguage {
     if ($chkSameLine) {
         $chkSameLine.Content   = Get-UiString 'ChkSameLine' 'Same line'
         $chkSameLine.ToolTip   = Get-UiString 'TooltipSameLine' 'All search phrases must appear on the same line'
+    }
+    if ($chkSkipFileName) {
+        $chkSkipFileName.Content = Get-UiString 'ChkSkipFileName' 'Skip file name'
+        $chkSkipFileName.ToolTip = Get-UiString 'TooltipSkipFileName' 'Exclude file names from search (search content only)'
+    }
+    if ($chkSkipFileContent) {
+        $chkSkipFileContent.Content = Get-UiString 'ChkSkipFileContent' 'Skip content'
+        $chkSkipFileContent.ToolTip = Get-UiString 'TooltipSkipFileContent' 'Exclude file contents from search (search file names only)'
     }
     if ($lblDateFilterLabel) { $lblDateFilterLabel.Text  = Get-UiString 'LabelDateFilter' 'Modified since:' }
     if ($dpModifiedSince)    { $dpModifiedSince.ToolTip = Get-UiString 'TooltipDateFilter' 'Filter files modified on or after this date. Leave empty for all files.' }
@@ -1712,7 +2256,7 @@ function Show-FilePreview($filePath) {
     $ext = $fileInfo.Extension.ToLowerInvariant()
     
     $lblFileName.Text = $fileInfo.Name
-        $lblFileIcon.Text = if ($ext -in '.ps1', '.psm1', '.psd1') { '⚡' }
+    $lblFileIcon.Text = if ($ext -in '.ps1', '.psm1', '.psd1') { '⚡' }
         elseif ($ext -in '.md', '.markdown') { '📝' }
         elseif ($ext -eq '.sql') { '🗄️' }
         elseif ($ext -in '.json', '.yaml', '.yml', '.toml') { '📦' }
@@ -1721,6 +2265,11 @@ function Show-FilePreview($filePath) {
         elseif ($ext -in '.csv', '.tsv') { '📊' }
         elseif ($ext -in '.cs', '.py', '.js', '.ts', '.cpp', '.c', '.h') { '💻' }
         elseif ($ext -in '.bat', '.cmd', '.sh') { '⚙️' }
+        elseif ($ext -in '.xlsx', '.xlsm', '.xltx', '.xls') { '📈' }
+        elseif ($ext -in '.docx', '.docm', '.dotx', '.doc') { '📃' }
+        elseif ($ext -in '.pptx', '.pptm') { '🎦' }
+        elseif ($ext -in '.odt', '.ods', '.odp', '.odg') { '📑' }
+        elseif ($ext -eq '.pdf') { '📕' }
         else { '📄' }
     $lblBadgeExtText.Text = if ($ext) { $ext.TrimStart('.').ToUpperInvariant() } else { 'FILE' }
     $txtFullPath.Text = $fileInfo.FullName
@@ -1728,8 +2277,17 @@ function Show-FilePreview($filePath) {
     $lblFileSize.Text = "{0:N1} KB" -f ($fileInfo.Length / 1024.0)
     $lblModifiedDate.Text = $fileInfo.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
 
+
     try {
-        $content = [System.IO.File]::ReadAllText($filePath)
+        # For OOXML / ODF / Legacy / PDF formats use the C# extractor; for all other formats read as plain text
+        $script:OfficePreviewExts = @('.xlsx','.xlsm','.xltx','.docx','.docm','.dotx','.pptx','.pptm','.odt','.ods','.odp','.odg','.ott','.otp','.ots','.xls','.xlt','.doc','.dot','.ppt','.pot','.pdf')
+        if ($ext -in $script:OfficePreviewExts) {
+            $extracted = [FastSearchEngineV2]::ExtractTextFromOfficeFile($filePath)
+            $notice    = (Get-UiString 'PreviewOfficeNotice' '[Plain text extracted — open file for full formatting]')
+            $content   = if ($extracted) { "$notice`n`n$extracted" } else { "$notice`n`n[No text content could be extracted from this file.]" }
+        } else {
+            $content = [System.IO.File]::ReadAllText($filePath)
+        }
         $txtPreview.Text = $content
 
         $lines = [System.Text.RegularExpressions.Regex]::Matches($content, "`n").Count + 1
@@ -1780,53 +2338,60 @@ function Invoke-ScriptSearch {
     $tokens = $script:CurrentTokens
     $isWhole = ($chkWholeWord.IsChecked -eq $true)
     $isSameLine = ($chkSameLine.IsChecked -eq $true)
+    $isSkipFileName = ($chkSkipFileName.IsChecked -eq $true)
+    $isSkipFileContent = ($chkSkipFileContent.IsChecked -eq $true)
 
     $lblStatus.Text = (Get-UiString 'StatusSearching' 'Searching files in {0}...') -f $folder
     [System.Windows.Input.Mouse]::OverrideCursor = [System.Windows.Input.Cursors]::Wait
+    [System.Windows.Input.Mouse]::UpdateCursor()
+    [System.Windows.Forms.Application]::DoEvents()
 
-    # swSearch: measures only the parallel C# file scan
-    $swSearch = [System.Diagnostics.Stopwatch]::StartNew()
-    $results = [FastSearchEngineV2]::Search($folder, $tokens, $filterByDate, $minDate, $exts, $isWhole, $isSameLine)
-    $swSearch.Stop()
-    # swTotal: continues through BuildTree + WPF binding to capture total GUI-blocking time
-    $swTotal = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        # swSearch: measures only the parallel C# file scan
+        $swSearch = [System.Diagnostics.Stopwatch]::StartNew()
+        $results = [FastSearchEngineV2]::Search($folder, $tokens, $filterByDate, $minDate, $exts, $isWhole, $isSameLine, $isSkipFileName, $isSkipFileContent)
+        $swSearch.Stop()
+        # swTotal: continues through BuildTree + WPF binding to capture total GUI-blocking time
+        $swTotal = [System.Diagnostics.Stopwatch]::StartNew()
 
-    $script:CurrentResults = $results
-    $count = $results.Count
+        $script:CurrentResults = $results
+        $count = $results.Count
 
-    if ($count -eq 0) {
-        $treeResults.ItemsSource = $null
-        $script:RootTreeNode = $null
-        $swTotal.Stop()
-        $lblResultBadge.Text = Get-FileCountLabel 0
-        $lblStatus.Text = (Get-UiString 'StatusNoResults' 'No results in {0} ms.') -f $swSearch.ElapsedMilliseconds
-        $lblTopStats.Text = (Get-UiString 'TopStatsNoResultsFormat' '{0} ({1} ms)') -f (Get-FileCountLabel 0), $swSearch.ElapsedMilliseconds
-    } else {
-        # When no tokens are entered the result set can be huge (all files).
-        # Building the tree collapsed avoids rendering thousands of WPF nodes at once,
-        # which would block the UI thread for several seconds.
-        $hasTokens = ($tokens -and $tokens.Length -gt 0)
-        $autoExpand = $hasTokens -and ($count -le 500)
-        $rootNode = [FileNodeV2]::BuildTree($folder, $results, $autoExpand)
-        $script:RootTreeNode = $rootNode
+        if ($count -eq 0) {
+            $treeResults.ItemsSource = $null
+            $script:RootTreeNode = $null
+            $swTotal.Stop()
+            $lblResultBadge.Text = Get-FileCountLabel 0
+            $lblStatus.Text = (Get-UiString 'StatusNoResults' 'No results in {0} ms.') -f $swSearch.ElapsedMilliseconds
+            $lblTopStats.Text = (Get-UiString 'TopStatsNoResultsFormat' '{0} ({1} ms)') -f (Get-FileCountLabel 0), $swSearch.ElapsedMilliseconds
+        } else {
+            # When no tokens are entered the result set can be huge (all files).
+            # Building the tree collapsed avoids rendering thousands of WPF nodes at once,
+            # which would block the UI thread for several seconds.
+            $hasTokens = ($tokens -and $tokens.Length -gt 0)
+            $autoExpand = $hasTokens -and ($count -le 500)
+            $rootNode = [FileNodeV2]::BuildTree($folder, $results, $autoExpand)
+            $script:RootTreeNode = $rootNode
 
-        $list = [System.Collections.Generic.List[FileNodeV2]]::new()
-        $list.Add($rootNode)
-        $treeResults.ItemsSource = $list
-        $swTotal.Stop()
+            $list = [System.Collections.Generic.List[FileNodeV2]]::new()
+            $list.Add($rootNode)
+            $treeResults.ItemsSource = $list
+            $swTotal.Stop()
 
-        $lblResultBadge.Text = Get-FileCountLabel $count
-        # Top badge: search-only time (fast C# scan)
-        $lblTopStats.Text = (Get-UiString 'TopStatsFoundFormat' 'Found: {0} ({1} ms)') -f $count, $swSearch.ElapsedMilliseconds
-        # Bottom status bar: total time from search start to GUI ready
-        $lblStatus.Text = ((Get-UiString 'StatusResultsFound' 'Found {0} files in {1} ms in directory {2}') -f $count, $swSearch.ElapsedMilliseconds, $folder) +
-                          ("  |  Total: {0} ms" -f $swTotal.ElapsedMilliseconds)
+            $lblResultBadge.Text = Get-FileCountLabel $count
+            # Top badge: search-only time (fast C# scan)
+            $lblTopStats.Text = (Get-UiString 'TopStatsFoundFormat' 'Found: {0} ({1} ms)') -f $count, $swSearch.ElapsedMilliseconds
+            # Bottom status bar: total time from search start to GUI ready
+            $lblStatus.Text = ((Get-UiString 'StatusResultsFound' 'Found {0} files in {1} ms in directory {2}') -f $count, $swSearch.ElapsedMilliseconds, $folder) +
+                              ("  |  Total: {0} ms" -f $swTotal.ElapsedMilliseconds)
+        }
+    } finally {
+        [System.Windows.Input.Mouse]::OverrideCursor = $null
+        [System.Windows.Input.Mouse]::UpdateCursor()
     }
 
-    [System.Windows.Input.Mouse]::OverrideCursor = $null
-
     # Save the last search query, date filter, whole word, and same line preference
-    Save-AppConfig -SearchFolder $folder -FilterModifiedSince $dpModifiedSince.SelectedDate -FileExtensions $exts -LastSearchQuery $txtSearch.Text -MatchWholeWord $isWhole -MatchSameLine $isSameLine
+    Save-AppConfig -SearchFolder $folder -FilterModifiedSince $dpModifiedSince.SelectedDate -FileExtensions $exts -LastSearchQuery $txtSearch.Text -MatchWholeWord $isWhole -MatchSameLine $isSameLine -SkipFileName $isSkipFileName -SkipFileContent $isSkipFileContent
 }
 
 # ── 9. UI events and interactions ────────────────────────────────────────────
@@ -1883,6 +2448,8 @@ $btnReset.Add_Click({
     $script:SuppressDebounceSearch = $false
     if ($chkWholeWord) { $chkWholeWord.IsChecked = $false }
     if ($chkSameLine) { $chkSameLine.IsChecked = $false }
+    if ($chkSkipFileName) { $chkSkipFileName.IsChecked = $false }
+    if ($chkSkipFileContent) { $chkSkipFileContent.IsChecked = $false }
     $dpModifiedSince.SelectedDate = $null
     if ($btnClearDate) { $btnClearDate.Visibility = [System.Windows.Visibility]::Collapsed }
     $txtExtensions.Text = '*.ps1, *.md'
@@ -1901,6 +2468,28 @@ if ($chkWholeWord) {
 }
 if ($chkSameLine) {
     $chkSameLine.Add_Click({
+        if ($script:IsWindowLoaded) {
+            $script:SearchDebounceTimer.Stop()
+            $script:SearchDebounceTimer.Start()
+        }
+    })
+}
+if ($chkSkipFileName) {
+    $chkSkipFileName.Add_Click({
+        if ($chkSkipFileName.IsChecked -eq $true -and $chkSkipFileContent.IsChecked -eq $true) {
+            $chkSkipFileContent.IsChecked = $false
+        }
+        if ($script:IsWindowLoaded) {
+            $script:SearchDebounceTimer.Stop()
+            $script:SearchDebounceTimer.Start()
+        }
+    })
+}
+if ($chkSkipFileContent) {
+    $chkSkipFileContent.Add_Click({
+        if ($chkSkipFileContent.IsChecked -eq $true -and $chkSkipFileName.IsChecked -eq $true) {
+            $chkSkipFileName.IsChecked = $false
+        }
         if ($script:IsWindowLoaded) {
             $script:SearchDebounceTimer.Stop()
             $script:SearchDebounceTimer.Start()
@@ -2048,22 +2637,27 @@ $btnExtPresets.Add_Click({
         $cm.Items.Add($sep) | Out-Null
     }
 
-    # Preset packs
     & $addMenuItem (Get-UiString 'PresetScriptsDocs' '⚡📝 Scripts & Docs (*.ps1, *.md) [Default]') 'Set' '*.ps1, *.md'
     & $addMenuItem (Get-UiString 'PresetPowerShell' '⚡ PowerShell (*.ps1, *.psm1, *.psd1)') 'Set' '*.ps1, *.psm1, *.psd1'
     & $addMenuItem (Get-UiString 'PresetMarkdown' '📝 Markdown & Docs (*.md, *.txt)') 'Set' '*.md, *.txt'
     & $addMenuItem (Get-UiString 'PresetSql' '🗄️ SQL Scripts (*.sql)') 'Set' '*.sql'
     & $addMenuItem (Get-UiString 'PresetDataConfig' '📦 Data & Config (*.json, *.xml, *.yaml, *.csv)') 'Set' '*.json, *.xml, *.yaml, *.csv'
-    & $addMenuItem (Get-UiString 'PresetCode' '💻 All Code (*.ps1, *.sql, *.cs, *.py, *.js)') 'Set' '*.ps1, *.sql, *.cs, *.py, *.js'
+    & $addMenuItem (Get-UiString 'PresetOffice' '📈 Office & PDF (*.xlsx, *.docx, *.pdf, *.odt, *.ods, *.xls, *.doc)') 'Set' '*.xlsx, *.xlsm, *.docx, *.pptx, *.pdf, *.odt, *.ods, *.xls, *.doc'
+    & $addMenuItem (Get-UiString 'PresetExcel' '📈 Excel Only (*.xlsx, *.xlsm, *.xls)') 'Set' '*.xlsx, *.xlsm, *.xls'
     & $addMenuItem (Get-UiString 'PresetAllFiles' '🌐 All Files (*.*)') 'Set' '*.*'
 
     & $addSeparator
 
     # Append actions
-    & $addMenuItem (Get-UiString 'PresetAppendSql' '➕ Append *.sql') 'Append' '*.sql'
+    & $addMenuItem (Get-UiString 'PresetAppendSql'  '➕ Append *.sql')  'Append' '*.sql'
     & $addMenuItem (Get-UiString 'PresetAppendJson' '➕ Append *.json') 'Append' '*.json'
-    & $addMenuItem (Get-UiString 'PresetAppendXml' '➕ Append *.xml') 'Append' '*.xml'
-    & $addMenuItem (Get-UiString 'PresetAppendTxt' '➕ Append *.txt') 'Append' '*.txt'
+    & $addMenuItem (Get-UiString 'PresetAppendXml'  '➕ Append *.xml')  'Append' '*.xml'
+    & $addMenuItem (Get-UiString 'PresetAppendTxt'  '➕ Append *.txt')  'Append' '*.txt'
+    & $addMenuItem (Get-UiString 'PresetAppendXlsx' '➕ Append *.xlsx') 'Append' '*.xlsx'
+    & $addMenuItem (Get-UiString 'PresetAppendDocx' '➕ Append *.docx') 'Append' '*.docx'
+    & $addMenuItem (Get-UiString 'PresetAppendXls'  '➕ Append *.xls')  'Append' '*.xls'
+    & $addMenuItem (Get-UiString 'PresetAppendDoc'  '➕ Append *.doc')  'Append' '*.doc'
+    & $addMenuItem (Get-UiString 'PresetAppendPdf'  '➕ Append *.pdf')  'Append' '*.pdf'
 
     & $addSeparator
 
@@ -2100,7 +2694,7 @@ $btnBrowse.Add_Click({
     if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         $txtFolder.Text = $dialog.SelectedPath
         $script:CurrentFolder = $dialog.SelectedPath
-        Save-AppConfig -SearchFolder $dialog.SelectedPath -FilterModifiedSince $dpModifiedSince.SelectedDate -LastSearchQuery $txtSearch.Text -MatchWholeWord ($chkWholeWord.IsChecked -eq $true) -MatchSameLine ($chkSameLine.IsChecked -eq $true)
+        Save-AppConfig -SearchFolder $dialog.SelectedPath -FilterModifiedSince $dpModifiedSince.SelectedDate -LastSearchQuery $txtSearch.Text -MatchWholeWord ($chkWholeWord.IsChecked -eq $true) -MatchSameLine ($chkSameLine.IsChecked -eq $true) -SkipFileName ($chkSkipFileName.IsChecked -eq $true) -SkipFileContent ($chkSkipFileContent.IsChecked -eq $true)
         $lblStatusRight.Text = "$($dialog.SelectedPath) | UTF-8 with BOM"
         Invoke-ScriptSearch
     }
@@ -2110,7 +2704,7 @@ $btnBrowse.Add_Click({
 $btnSaveDefault.Add_Click({
     $folder = $txtFolder.Text.Trim()
     if (Test-Path -LiteralPath $folder) {
-        Save-AppConfig -SearchFolder $folder -FilterModifiedSince $dpModifiedSince.SelectedDate -LastSearchQuery $txtSearch.Text -MatchWholeWord ($chkWholeWord.IsChecked -eq $true) -MatchSameLine ($chkSameLine.IsChecked -eq $true)
+        Save-AppConfig -SearchFolder $folder -FilterModifiedSince $dpModifiedSince.SelectedDate -LastSearchQuery $txtSearch.Text -MatchWholeWord ($chkWholeWord.IsChecked -eq $true) -MatchSameLine ($chkSameLine.IsChecked -eq $true) -SkipFileName ($chkSkipFileName.IsChecked -eq $true) -SkipFileContent ($chkSkipFileContent.IsChecked -eq $true)
         $lblStatus.Text = (Get-UiString 'StatusSavedDefault' "Saved '{0}' as default directory in config.json") -f $folder
         $lblStatusRight.Text = "$folder | UTF-8 with BOM"
     } else {
@@ -2297,7 +2891,7 @@ $cmbLanguage.Add_SelectionChanged({
     $selected = $cmbLanguage.SelectedItem
     if ($selected -and $selected.Tag -and $selected.Tag -ne $script:CurrentLanguage) {
         Set-UiLanguage -LanguageCode $selected.Tag
-        Save-AppConfig -SearchFolder $txtFolder.Text.Trim() -FilterModifiedSince $dpModifiedSince.SelectedDate -LastSearchQuery $txtSearch.Text -Language $selected.Tag -MatchWholeWord ($chkWholeWord.IsChecked -eq $true) -MatchSameLine ($chkSameLine.IsChecked -eq $true)
+        Save-AppConfig -SearchFolder $txtFolder.Text.Trim() -FilterModifiedSince $dpModifiedSince.SelectedDate -LastSearchQuery $txtSearch.Text -Language $selected.Tag -MatchWholeWord ($chkWholeWord.IsChecked -eq $true) -MatchSameLine ($chkSameLine.IsChecked -eq $true) -SkipFileName ($chkSkipFileName.IsChecked -eq $true) -SkipFileContent ($chkSkipFileContent.IsChecked -eq $true)
     }
 })
 
@@ -2305,7 +2899,7 @@ $cmbLanguage.Add_SelectionChanged({
 $btnThemeToggle.Add_Click({
     $newTheme = if ($script:CurrentTheme -eq 'Light') { 'Dark' } else { 'Light' }
     Apply-Theme -Theme $newTheme
-    Save-AppConfig -SearchFolder $txtFolder.Text.Trim() -FilterModifiedSince $dpModifiedSince.SelectedDate -LastSearchQuery $txtSearch.Text -Language $script:CurrentLanguage -Theme $newTheme -MatchWholeWord ($chkWholeWord.IsChecked -eq $true) -MatchSameLine ($chkSameLine.IsChecked -eq $true)
+    Save-AppConfig -SearchFolder $txtFolder.Text.Trim() -FilterModifiedSince $dpModifiedSince.SelectedDate -LastSearchQuery $txtSearch.Text -Language $script:CurrentLanguage -Theme $newTheme -MatchWholeWord ($chkWholeWord.IsChecked -eq $true) -MatchSameLine ($chkSameLine.IsChecked -eq $true) -SkipFileName ($chkSkipFileName.IsChecked -eq $true) -SkipFileContent ($chkSkipFileContent.IsChecked -eq $true)
 })
 
 # Window keyboard shortcuts (F3 / Shift+F3 to navigate matches, Ctrl+F to search)
