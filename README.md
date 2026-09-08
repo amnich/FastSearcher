@@ -37,10 +37,18 @@ Powered by an in-memory compiled C# parallel search engine ([FastSearchEngineV2]
 ### 2. Intelligent Query Parsing & Strict "ALL" (AND) Matching
 - **Multi-Word Search**: Typing `BC user compare` matches only files that contain **all three** tokens (any order, in content or file name).
 - **Exact Quoted Phrases & Whitespace Preservation**: Supports double (`"AD compare"`) and single (`'AD compare'`) quotes to treat phrases with spaces as atomic search terms. Leading and trailing whitespaces inside quotes (such as `" DR "` or `"dr "`) are **never trimmed**, allowing exact whitespace-delimited targeting.
+- **Negative Exclusion Tokens (v1.2)**: Exclude unwanted files by prefixing words or quoted phrases with a minus sign (e.g. `ProjectAlpha -test -"old backup"`). Files containing any excluded token in their content or name are immediately discarded.
+- **Regular Expression Search Mode (v1.2)**: Dedicated `"Regex"` checkbox (`chkRegex`) evaluates search tokens as regular expressions (e.g. `ORD-\d{4,}` or `function\s+\w+`). Includes an automated **2-second timeout protection** against catastrophic backtracking (ReDoS).
 - **Whole Word Matching**: Dedicated `"Whole word"` checkbox (`chkWholeWord`) restricts search tokens to standalone words bounded by standard word boundaries (`\b` or non-alphanumeric/non-underscore characters). For example, searching `DR` will match `$DR = 1` or `DR test`, but will **not** match `poDRill` or `DR_test`.
 - **Same Line (Single Line) Matching**: Dedicated `"Same line"` checkbox (`chkSameLine`) restricts search results to files where **all entered search terms appear on the exact same line** (or in the file name). Uses an ultra-fast zero-allocation anchor scanner that checks candidate files without creating substring copies or array allocations.
 - **Skip File Name Search**: Dedicated `"Skip file name"` checkbox (`chkSkipFileName`) excludes file names from query matching, enforcing that all search tokens must exist within the file content.
 - **Skip Content Search**: Dedicated `"Skip content"` checkbox (`chkSkipFileContent`) skips reading and searching file content entirely, evaluating search tokens strictly against file names. This delivers instant, zero-I/O filename searches across tens of thousands of files.
+- **Asynchronous Background Search & Live Progress (v1.3)**: File scans execute entirely on a background thread pool worker via C# `Task.Run` without blocking the WPF UI thread. A dedicated 40ms `DispatcherTimer` running at `DispatcherPriority.Normal` delivers live atomic progress indicators (`"Searching... (2,915 scanned, 599 matches)"`) and displays an indeterminate progress bar.
+- **Dual Performance Timing & Total UI Unlock Metric (v1.3)**: Tracks and displays two distinct performance metrics on the bottom status bar:
+  1. **Core Search Time**: Time consumed by the parallel C# search engine traversing and reading files.
+  2. **Total Elapsed Time**: Wall-clock duration from search trigger through background scanning, tree hierarchy construction, and complete WPF UI unlock (`"Found 599 files in 390 ms in directory D:\Skrypty  |  Total: 435 ms"`).
+- **Smart Tree Virtualization & Auto-Expansion Guard (v1.3)**: The results tree utilizes WPF UI virtualization (`ScrollViewer.CanContentScroll="True"`, `VirtualizingStackPanel.IsVirtualizing="True"`, `VirtualizationMode="Recycling"`). Targeted queries (≤ 500 matching files) automatically expand matched branches for quick exploration; broad or empty searches returning thousands of files remain collapsed at the root, ensuring zero UI freezing even across repositories of 10,000+ files.
+- **Live Search Cancellation (v1.3)**: The search button transforms into a `🛑 Cancel` button during active scans. Users can instantly cancel running scans by clicking Cancel, pressing `Escape`, or modifying the search text.
 - **Typing Search Delay (Debounce)**: Automatic search execution waits for a configurable pause in typing (default **750 ms**, set via `config.json`). While typing, the status bar displays live feedback (`"Typing... search will start shortly"`), preventing premature searches in the middle of typing multi-word phrases. Pressing `Enter` runs the search immediately with zero delay.
 - **Punctuation Resilient**: Cleanses delimiters such as commas and semicolons outside quotes (e.g. `BC, user, compare`).
 - **Case-Insensitive**: Performs case-agnostic lookups (`StringComparison.OrdinalIgnoreCase`).
@@ -98,6 +106,7 @@ Powered by an in-memory compiled C# parallel search engine ([FastSearchEngineV2]
   - 📕 PDF Documents (`.pdf`)
   - 📄 Generic files
 - **Subtitles & Badges**: Each file node displays formatted file size (in KB) and last modification timestamp (`yyyy-MM-dd HH:mm`).
+- **Hardware-Accelerated UI Virtualization**: The TreeView employs `VirtualizingStackPanel.IsVirtualizing="True"`, `VirtualizingStackPanel.VirtualizationMode="Recycling"`, and `ScrollViewer.CanContentScroll="True"`, rendering only items visible in the current viewport to conserve memory and maintain smooth 60 FPS scrolling.
 - **Tree Expansion Control**: Dedicated `⊞ Expand` and `⊟ Collapse` buttons for global tree navigation.
 
 ### 6. Content Previewer & Match Navigation
@@ -206,8 +215,10 @@ The script compiles specialized C# classes using `Add-Type` at startup:
 | **Same Line**    | `chkSameLine` | Restricts matching to files where all search terms appear on the same line. |
 | **Skip File Name**| `chkSkipFileName` | Excludes file names from match criteria (requires terms to appear in file content). |
 | **Skip Content** | `chkSkipFileContent`| Excludes file contents from search (matches terms against file names only). |
-| **Search Button** | `btnSearch` | Forces immediate search scan (`Enter`). |
-| **Reset Filters** | `btnReset` | Clears query, resets date filter to all files, unchecks whole word/same line, and resets extensions. |
+| **Regex Mode**   | `chkRegex` | Evaluates tokens as regular expressions with 2s timeout guard. |
+| **Search / Cancel Button** | `btnSearch` | Forces immediate search scan (`Enter`) or aborts active background search (`🛑 Cancel`). |
+| **Progress Bar** | `pbSearchProgress` | Indeterminate progress bar indicating active asynchronous background search. |
+| **Reset Filters** | `btnReset` | Clears query, resets date filter to all files, unchecks whole word/same line/regex, and resets extensions. |
 | **Modified Since**| `dpModifiedSince` | Dynamic DatePicker to filter files modified on or after chosen date (default: all files). |
 | **Clear Date**    | `btnClearDate` | Instantly clears date filter back to all files (`✕`). |
 | **Date Presets**  | `btnDatePresets` | Quick date presets menu (Today, 24h, 3d, 5d, 7d, 14d, 30d, 90d, This Year, All). |
@@ -409,6 +420,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ".\Build-Exe.ps1"
 | Shortcut / Action | Scope | Action Performed |
 | :--- | :--- | :--- |
 | <kbd>Enter</kbd> | Search Box | Triggers immediate search scan |
+| <kbd>Esc</kbd> | Anywhere in Window | Cancels active background search scan (`🛑 Cancel`) |
 | <kbd>Ctrl</kbd> + <kbd>F</kbd> | Anywhere in Window | Focuses the search box and selects all query text |
 | <kbd>F3</kbd> | Preview Editor | Navigates to the **Next** match in the active file |
 | <kbd>Shift</kbd> + <kbd>F3</kbd> | Preview Editor | Navigates to the **Previous** match in the active file |

@@ -22,10 +22,14 @@ Aplikacja wykorzystuje wielowątkowy silnik w języku C# (`Parallel.ForEach`), c
 2. **Inteligentne parsowanie zapytań i bezwzględne dopasowanie "ALL" (AND)**:
    - **Wiele fraz rozdzielonych spacjami**: wpisanie `BC user compare` wyszukuje wyłącznie pliki zawierające **wszystkie** wyszukiwane frazy (`ALL` keywords). Każdy token musi wystąpić w pliku (w czystym kodzie lub nazwie pliku).
    - **Frazy w cudzysłowach z zachowaniem spacji (no-trim)**: wpisanie `BC "AD compare"` traktuje `"AD compare"` jako jedną całość. Białe znaki wewnątrz cudzysłowów (np. `" DR "` lub `"dr "`) **nie są obcinane**, co pozwala na precyzyjne dopasowanie z dokładnymi spacjami.
+   - **Wykluczanie fraz (Negative Exclusions, v1.2)**: obsługa prefiksu minus (`-fraza` lub `-"fraza ze spacjami"`, np. `BC -test -"stara kopia"`). Pliki zawierające wykluczone tokeny są natychmiast odrzucane z wyników.
+   - **Tryb wyrażeń regularnych (`Regex` / `chkRegex`, v1.2)**: dedykowany checkbox pozwalający na ewaluację wpisanych tokenów jako wyrażeń regularnych .NET (np. `INV-\d{4}` lub `function\s+\w+`), zabezpieczony automatycznym 2-sekundowym limitem czasu przed atakami ReDoS (catastrophic backtracking).
    - **Dopasowanie całych słów (`Całe słowa` / `chkWholeWord`)**: dedykowany checkbox przy polu wyszukiwania ograniczający dopasowanie do całych słów ograniczonych granicami słów (`\b`). Szukanie `DR` dopasuje `$DR = 1` lub `DR test`, ale pominie podciągi takie jak `poDRill` czy `DR_test`.
    - **Dopasowanie w tej samej linii (`Ta sama linia` / `chkSameLine`)**: dedykowany checkbox wymagający, aby **wszystkie wpisane frazy występowały w dokładnie tej samej linii** w pliku (lub w nazwie pliku). Zapewnia to natychmiastowe odnajdywanie powiązanych instrukcji w kodzie (np. `param folder`) z pominięciem plików, gdzie słowa te występują w odległych miejscach.
    - **Pomiń nazwy plików (`Pomiń nazwy` / `chkSkipFileName`)**: dedykowany checkbox wykluczający dopasowanie do nazw plików — wymaga, aby wszystkie wyszukiwane frazy znajdowały się w treści pliku.
    - **Pomiń treść plików (`Pomiń treść` / `chkSkipFileContent`)**: dedykowany checkbox pomijający skanowanie zawartości plików — dopasowuje frazy wyłącznie do nazw plików, co gwarantuje natychmiastowe wyszukiwanie z zerowym odczytem dyskowym.
+   - **Asynchroniczne skanowanie w tle i liczniki live (`SearchAsync`, v1.3)**: przeszukiwanie uruchamiane w osobnym wątku roboczym C# (`Task.Run`) bez zamrażania interfejsu WPF. Dedykowany timer Dispatchera odświeża co 40 ms pasek stanu (`Szukanie... (1 240 przeskanowanych, 8 trafień)`) i animuje wskaźnik `ProgressBar`.
+   - **Anulowanie wyszukiwania w locie (v1.3)**: przycisk `Szukaj` zmienia się w trakcie skanowania w `🛑 Anuluj`. Wciśnięcie klawisza `Escape`, kliknięcie przycisku lub dalsze pisanie natychmiast bezpiecznie przerywa operację przez `CancellationTokenSource`.
    - **Pomiary znaków interpunkcyjnych**: automatycznie oczyszcza przecinki i średniki poza cudzysłowami (np. `BC, user, compare`).
    - Ignoruje wielkość liter (case-insensitive).
 3. **Automatyczne wyszukiwanie w locie (Debounce / opóźnienie 750 ms) i skróty**:
@@ -95,6 +99,7 @@ Plik konfiguracyjny znajduje się w folderze aplikacji: `D:\Skrypty\Mnich_Adam_S
   "Language": "pl",
   "MatchWholeWord": false,
   "MatchSameLine": false,
+  "MatchRegex": false,
   "SkipFileName": false,
   "SkipFileContent": false,
   "SearchDebounceMs": 750
@@ -114,10 +119,12 @@ Plik konfiguracyjny znajduje się w folderze aplikacji: `D:\Skrypty\Mnich_Adam_S
 | **Clear Search** | `btnClearSearch` | Czyści pole wyszukiwania i odświeża wyniki (`✕`) |
 | **Whole Word** | `chkWholeWord` | Opcja wyszukiwania tylko całych słów (`Całe słowa`, np. `DR` pomija `poDRill`) |
 | **Same Line** | `chkSameLine` | Wymusza występowanie wszystkich szukanych fraz w tej samej linii (`Ta sama linia`) |
+| **Regex Mode** | `chkRegex` | Wyszukiwanie za pomocą wyrażeń regularnych .NET z 2-sekundowym limitem czasu (`Regex`) |
 | **Skip File Name** | `chkSkipFileName` | Wyklucza nazwy plików z kryteriów wyszukiwania (`Pomiń nazwy`, szuka tylko w treści) |
 | **Skip Content** | `chkSkipFileContent` | Pomija przeszukiwanie zawartości (`Pomiń treść`, szuka wyłącznie po nazwach plików) |
-| **Search Button** | `btnSearch` | Uruchamia wyszukiwanie natychmiast (skrót: `Enter`) |
-| **Reset Filters** | `btnReset` | Czyści zapytanie, resetuje datę do wszystkich plików, odznacza całe słowa/tą samą linię i przywraca rozszerzenia domyślne |
+| **Search Button** | `btnSearch` | Przycisk o podwójnym stanie (`Szukaj` / `Anuluj`) – uruchamia natychmiastowe wyszukiwanie lub przerywa trwający proces (skróty: `Enter` / `Esc`) |
+| **Progress Bar** | `pbSearchProgress` | Pasek postępu operacji wyszukiwania w tle w dolnym pasku stanu |
+| **Reset Filters** | `btnReset` | Czyści zapytanie, resetuje datę do wszystkich plików, odznacza całe słowa/tą samą linię/regex i przywraca rozszerzenia domyślne |
 | **Modified Since** | `dpModifiedSince` | Dynamiczny DatePicker do wyboru daty granicznej (domyślnie: wszystkie pliki) |
 | **Clear Date** | `btnClearDate` | Przycisk czyszczenia daty do stanu domyślnego (`✕`) |
 | **Date Presets** | `btnDatePresets` | Menu szablonów dat (Dzisiaj, 24h, 3d, 5d, 7d, 14d, 30d, 90d, Ten rok, Wszystkie) |
@@ -128,7 +135,7 @@ Plik konfiguracyjny znajduje się w folderze aplikacji: `D:\Skrypty\Mnich_Adam_S
 | **Expand / Collapse**| `btnExpandAll`, `btnCollapseAll` | Globalne sterowanie rozwinięciem węzłów |
 | **Preview Box** | `txtPreview` | Ciemny edytor podglądu z `ScrollToLine` i trwałym zaznaczeniem |
 | **Match Nav** | `btnPrevMatch`, `btnNextMatch` | Przechodzenie do poprzedniego/następnego trafienia (skróty: `Shift+F3` / `F3`) |
-| **Status Bar** | `lblStatus`, `lblStatusRight` | Liczba trafień, czas skanowania C# oraz całkowity czas GUI (search + BuildTree + WPF binding) |
+| **Status Bar** | `lblStatus`, `lblStatusRight` | Liczba trafień, liczniki live (`X przeskanowanych`), czas skanowania C# oraz całkowity czas GUI |
 | **Top Stats Badge** | `lblTopStats` | Skrócony wynik w nagłówku: `Found: N (X ms)` — czas samego skanowania C# |
 
 ---
@@ -195,3 +202,6 @@ lub uruchomienie skompilowanego pliku `.exe`:
 10. `Backup` z zaznaczoną opcją **Pomiń treść** — błyskawicznie lokalizuje pliki z `Backup` w nazwie bez otwierania ani skanowania zawartości z dysku.
 11. `txtExtensions` ustawione na `*.sql` — przeszukuje wyłącznie skrypty SQL z ikoną 🗄️.
 12. `txtExtensions` ustawione na `*.*` (lub kliknięty przycisk `*.* All`) — przeszukuje wszystkie pliki w katalogu z pełną deduplikacją i zabezpieczeniem przed plikami binarnymi powyżej 25 MB.
+13. `BC -test -"stara kopia"` — wyszukuje pliki zawierające `BC`, ale bezwzględnie wyklucza pliki zawierające słowo `test` lub frazę `"stara kopia"` (tokeny wykluczające z prefiksem `-`).
+14. `INV-\d{4}` z zaznaczoną opcją **Regex** — wyszukuje za pomocą wyrażeń regularnych numery faktur w formacie 4 cyfr z automatyczną 2-sekundową ochroną przed ReDoS.
+

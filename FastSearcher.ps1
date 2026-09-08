@@ -76,9 +76,19 @@ using System.IO;
 using System.IO.Compression;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Text;
 using System.Text.RegularExpressions;
+
+public class ParsedQueryV2 {
+    public string[] IncludeTokens { get; set; }
+    public string[] ExcludeTokens { get; set; }
+    public ParsedQueryV2() {
+        IncludeTokens = new string[0];
+        ExcludeTokens = new string[0];
+    }
+}
 
 public class SearchResultItemV2 {
     public string FullPath { get; set; }
@@ -197,6 +207,8 @@ public class FileNodeV2 {
 }
 
 public class FastSearchEngineV2 {
+    public static int ScannedCount = 0;
+    public static int MatchedCount = 0;
 
     // ── Office-format text extraction (OOXML + ODF + Legacy OLE2) ───────────
     // Supported:
@@ -662,25 +674,38 @@ public class FastSearchEngineV2 {
         return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
     }
 
-    public static string[] ParseTokens(string query) {
-        if (string.IsNullOrWhiteSpace(query)) return new string[0];
-        var tokens = new List<string>();
-        var regex = new Regex(@"""(?<q>[^""]*)""|'(?<q>[^']*)'|(?<u>[^\s""',;]+)");
+    public static ParsedQueryV2 ParseQuery(string query, bool matchRegex) {
+        var res = new ParsedQueryV2();
+        if (string.IsNullOrWhiteSpace(query)) return res;
+
+        var inc = new List<string>();
+        var exc = new List<string>();
+
+        var regex = new Regex(@"-(""(?<enq>[^""]*)""|'(?<enq>[^']*)'|(?<enu>[^\s"",;]+))|(""(?<q>[^""]*)""|'(?<q>[^']*)'|(?<u>[^\s"",;]+))");
         var matches = regex.Matches(query);
         foreach (Match m in matches) {
-            if (m.Groups["q"].Success) {
-                var val = m.Groups["q"].Value;
-                if (!string.IsNullOrEmpty(val)) {
-                    tokens.Add(val);
-                }
+            if (m.Groups["enq"].Success) {
+                var v = m.Groups["enq"].Value;
+                if (!string.IsNullOrEmpty(v)) exc.Add(v);
+            } else if (m.Groups["enu"].Success) {
+                var v = m.Groups["enu"].Value.Trim();
+                if (!string.IsNullOrEmpty(v)) exc.Add(v);
+            } else if (m.Groups["q"].Success) {
+                var v = m.Groups["q"].Value;
+                if (!string.IsNullOrEmpty(v)) inc.Add(v);
             } else if (m.Groups["u"].Success) {
-                var val = m.Groups["u"].Value.Trim();
-                if (!string.IsNullOrEmpty(val)) {
-                    tokens.Add(val);
-                }
+                var v = m.Groups["u"].Value.Trim();
+                if (!string.IsNullOrEmpty(v)) inc.Add(v);
             }
         }
-        return tokens.ToArray();
+
+        res.IncludeTokens = inc.ToArray();
+        res.ExcludeTokens = exc.ToArray();
+        return res;
+    }
+
+    public static string[] ParseTokens(string query) {
+        return ParseQuery(query, false).IncludeTokens;
     }
 
     public static bool IsWordChar(char c) {
@@ -736,10 +761,36 @@ public class FastSearchEngineV2 {
         return false;
     }
 
-    public static bool ContainsTokensOnSameLine(string text, string[] tokens, bool matchWholeWord) {
+    public static bool TryCompileRegex(string pattern, out Regex regex) {
+        try {
+            regex = new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(2));
+            return true;
+        } catch {
+            regex = null;
+            return false;
+        }
+    }
+
+    public static bool MatchToken(string text, string token, bool matchWholeWord, bool matchRegex, Regex compiledRegex) {
+        if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(token)) return false;
+        try {
+            if (matchRegex) {
+                return compiledRegex != null && compiledRegex.IsMatch(text);
+            }
+            if (matchWholeWord) {
+                return ContainsWholeWord(text, token);
+            }
+            return text.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0;
+        } catch {
+            return false;
+        }
+    }
+
+    public static bool ContainsTokensOnSameLine(string text, string[] tokens, bool matchWholeWord, bool matchRegex, Regex[] compiledRegexes) {
         if (string.IsNullOrEmpty(text) || tokens == null || tokens.Length == 0) return false;
         if (tokens.Length == 1) {
-            return matchWholeWord ? ContainsWholeWord(text, tokens[0]) : text.IndexOf(tokens[0], StringComparison.OrdinalIgnoreCase) >= 0;
+            Regex rx = (compiledRegexes != null && compiledRegexes.Length > 0) ? compiledRegexes[0] : null;
+            return MatchToken(text, tokens[0], matchWholeWord, matchRegex, rx);
         }
 
         // Pick longest token as primary anchor
@@ -752,6 +803,27 @@ public class FastSearchEngineV2 {
             }
         }
         string anchor = tokens[anchorIdx];
+        Regex anchorRx = (compiledRegexes != null && anchorIdx < compiledRegexes.Length) ? compiledRegexes[anchorIdx] : null;
+
+        if (matchRegex && anchorRx != null) {
+            using (var sr = new StringReader(text)) {
+                string line;
+                while ((line = sr.ReadLine()) != null) {
+                    if (!anchorRx.IsMatch(line)) continue;
+                    bool allMatched = true;
+                    for (int i = 0; i < tokens.Length; i++) {
+                        if (i == anchorIdx) continue;
+                        Regex r = (compiledRegexes != null && i < compiledRegexes.Length) ? compiledRegexes[i] : null;
+                        if (r != null && !r.IsMatch(line)) {
+                            allMatched = false;
+                            break;
+                        }
+                    }
+                    if (allMatched) return true;
+                }
+            }
+            return false;
+        }
 
         int startSearch = 0;
         while (startSearch <= text.Length - anchor.Length) {
@@ -807,7 +879,14 @@ public class FastSearchEngineV2 {
         return false;
     }
 
-    public static List<SearchResultItemV2> Search(string rootPath, string[] tokens, bool filterByDate, DateTime minDate, string[] extensions, bool matchWholeWord, bool matchSameLine, bool skipFileName, bool skipFileContent) {
+    public static bool ContainsTokensOnSameLine(string text, string[] tokens, bool matchWholeWord) {
+        return ContainsTokensOnSameLine(text, tokens, matchWholeWord, false, null);
+    }
+
+    public static List<SearchResultItemV2> Search(string rootPath, string[] tokens, string[] excludeTokens, bool filterByDate, DateTime minDate, string[] extensions, bool matchWholeWord, bool matchSameLine, bool skipFileName, bool skipFileContent, bool matchRegex, System.Threading.CancellationToken ct) {
+        Interlocked.Exchange(ref ScannedCount, 0);
+        Interlocked.Exchange(ref MatchedCount, 0);
+
         var results = new ConcurrentBag<SearchResultItemV2>();
         if (string.IsNullOrWhiteSpace(rootPath) || !Directory.Exists(rootPath)) {
             return new List<SearchResultItemV2>();
@@ -846,107 +925,157 @@ public class FastSearchEngineV2 {
 
         var fileSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var ext in normalizedExts) {
+            if (ct.IsCancellationRequested) return new List<SearchResultItemV2>();
             try {
                 foreach (var f in Directory.EnumerateFiles(rootPath, ext, SearchOption.AllDirectories)) {
+                    if (ct.IsCancellationRequested) return new List<SearchResultItemV2>();
                     fileSet.Add(f);
                 }
             } catch {}
         }
 
         bool hasTokens = tokens != null && tokens.Length > 0;
+        bool hasExcludes = excludeTokens != null && excludeTokens.Length > 0;
 
-        Parallel.ForEach(fileSet, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, file => {
-            try {
-                var fileInfo = new FileInfo(file);
-                if (filterByDate && fileInfo.LastWriteTime < minDate) {
+        Regex[] compInc = null;
+        Regex[] compExc = null;
+        if (matchRegex) {
+            if (hasTokens) {
+                compInc = new Regex[tokens.Length];
+                for (int i = 0; i < tokens.Length; i++) TryCompileRegex(tokens[i], out compInc[i]);
+            }
+            if (hasExcludes) {
+                compExc = new Regex[excludeTokens.Length];
+                for (int i = 0; i < excludeTokens.Length; i++) TryCompileRegex(excludeTokens[i], out compExc[i]);
+            }
+        }
+
+        try {
+            Parallel.ForEach(fileSet, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount, CancellationToken = ct }, (file, state) => {
+                if (ct.IsCancellationRequested) {
+                    state.Stop();
                     return;
                 }
 
-                if (hasTokens) {
-                    if (skipFileContent) {
-                        for (int i = 0; i < tokens.Length; i++) {
-                            bool inName = matchWholeWord
-                                ? ContainsWholeWord(fileInfo.Name, tokens[i])
-                                : fileInfo.Name.IndexOf(tokens[i], StringComparison.OrdinalIgnoreCase) >= 0;
-                            if (!inName) {
-                                return;
-                            }
-                        }
-                    } else {
-                        if (fileInfo.Length > 25 * 1024 * 1024) {
-                            return;
-                        }
+                try {
+                    var fileInfo = new FileInfo(file);
+                    Interlocked.Increment(ref ScannedCount);
 
-                        string content;
-                        string fileExt = fileInfo.Extension;
+                    if (filterByDate && fileInfo.LastWriteTime < minDate) {
+                        return;
+                    }
 
-                        if (IsOfficeFormat(fileExt)) {
-                            // Extract text from ZIP-based Office format (OOXML/ODF) or PDF
-                            content = ExtractTextFromOfficeFile(file);
-                            if (content == null) {
-                                // Not extractable — match by file name only if tokens present
-                                content = string.Empty;
-                            }
-                        } else {
-                            content = File.ReadAllText(file);
-                        }
-
-                        // Remove the certificate / digital signature block to avoid false base64 matches
-                        int sigIdx = content.IndexOf("# SIG # Begin signature block", StringComparison.OrdinalIgnoreCase);
-                        string searchContent = (sigIdx >= 0) ? content.Substring(0, sigIdx) : content;
-
-                        // "ALL" condition - every given token must occur in the file (content or file name)
-                        for (int i = 0; i < tokens.Length; i++) {
-                            bool inContent = matchWholeWord
-                                ? ContainsWholeWord(searchContent, tokens[i])
-                                : searchContent.IndexOf(tokens[i], StringComparison.OrdinalIgnoreCase) >= 0;
-                            bool inName = !skipFileName && (matchWholeWord
-                                ? ContainsWholeWord(fileInfo.Name, tokens[i])
-                                : fileInfo.Name.IndexOf(tokens[i], StringComparison.OrdinalIgnoreCase) >= 0);
-                            if (!inContent && !inName) {
-                                return;
-                            }
-                        }
-
-                        if (matchSameLine && tokens.Length > 1) {
-                            // Check if file name contains all tokens
-                            bool nameHasAll = false;
-                            if (!skipFileName) {
-                                nameHasAll = true;
-                                for (int i = 0; i < tokens.Length; i++) {
-                                    bool inName = matchWholeWord
-                                        ? ContainsWholeWord(fileInfo.Name, tokens[i])
-                                        : fileInfo.Name.IndexOf(tokens[i], StringComparison.OrdinalIgnoreCase) >= 0;
-                                    if (!inName) { nameHasAll = false; break; }
+                    if (hasTokens || hasExcludes) {
+                        if (skipFileContent) {
+                            if (hasExcludes) {
+                                for (int i = 0; i < excludeTokens.Length; i++) {
+                                    Regex rx = (compExc != null && i < compExc.Length) ? compExc[i] : null;
+                                    if (MatchToken(fileInfo.Name, excludeTokens[i], matchWholeWord, matchRegex, rx)) {
+                                        return;
+                                    }
                                 }
                             }
-                            if (!nameHasAll) {
-                                if (!ContainsTokensOnSameLine(searchContent, tokens, matchWholeWord)) {
-                                    return;
+                            if (hasTokens) {
+                                for (int i = 0; i < tokens.Length; i++) {
+                                    Regex rx = (compInc != null && i < compInc.Length) ? compInc[i] : null;
+                                    if (!MatchToken(fileInfo.Name, tokens[i], matchWholeWord, matchRegex, rx)) {
+                                        return;
+                                    }
+                                }
+                            }
+                        } else {
+                            if (fileInfo.Length > 25 * 1024 * 1024) {
+                                return;
+                            }
+
+                            string content;
+                            string fileExt = fileInfo.Extension;
+
+                            if (IsOfficeFormat(fileExt)) {
+                                content = ExtractTextFromOfficeFile(file);
+                                if (content == null) {
+                                    content = string.Empty;
+                                }
+                            } else {
+                                content = File.ReadAllText(file);
+                            }
+
+                            int sigIdx = content.IndexOf("# SIG # Begin signature block", StringComparison.OrdinalIgnoreCase);
+                            string searchContent = (sigIdx >= 0) ? content.Substring(0, sigIdx) : content;
+
+                            // 1. Exclude tokens check (early exit)
+                            if (hasExcludes) {
+                                for (int i = 0; i < excludeTokens.Length; i++) {
+                                    Regex rx = (compExc != null && i < compExc.Length) ? compExc[i] : null;
+                                    bool inContent = MatchToken(searchContent, excludeTokens[i], matchWholeWord, matchRegex, rx);
+                                    bool inName = !skipFileName && MatchToken(fileInfo.Name, excludeTokens[i], matchWholeWord, matchRegex, rx);
+                                    if (inContent || inName) {
+                                        return; // Excluded!
+                                    }
+                                }
+                            }
+
+                            // 2. Include tokens check
+                            if (hasTokens) {
+                                for (int i = 0; i < tokens.Length; i++) {
+                                    Regex rx = (compInc != null && i < compInc.Length) ? compInc[i] : null;
+                                    bool inContent = MatchToken(searchContent, tokens[i], matchWholeWord, matchRegex, rx);
+                                    bool inName = !skipFileName && MatchToken(fileInfo.Name, tokens[i], matchWholeWord, matchRegex, rx);
+                                    if (!inContent && !inName) {
+                                        return;
+                                    }
+                                }
+
+                                if (matchSameLine && tokens.Length > 1) {
+                                    bool nameHasAll = false;
+                                    if (!skipFileName) {
+                                        nameHasAll = true;
+                                        for (int i = 0; i < tokens.Length; i++) {
+                                            Regex rx = (compInc != null && i < compInc.Length) ? compInc[i] : null;
+                                            if (!MatchToken(fileInfo.Name, tokens[i], matchWholeWord, matchRegex, rx)) {
+                                                nameHasAll = false;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if (!nameHasAll) {
+                                        if (!ContainsTokensOnSameLine(searchContent, tokens, matchWholeWord, matchRegex, compInc)) {
+                                            return;
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                string relPath = file.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase)
-                    ? file.Substring(rootPath.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                    : fileInfo.Name;
+                    string relPath = file.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase)
+                        ? file.Substring(rootPath.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                        : fileInfo.Name;
 
-                var item = new SearchResultItemV2();
-                item.FullPath = fileInfo.FullName;
-                item.FileName = fileInfo.Name;
-                item.RelativePath = relPath;
-                item.Extension = fileInfo.Extension.ToLowerInvariant();
-                item.Length = fileInfo.Length;
-                item.LastWriteTime = fileInfo.LastWriteTime;
-                results.Add(item);
-            } catch {}
-        });
+                    var item = new SearchResultItemV2();
+                    item.FullPath = fileInfo.FullName;
+                    item.FileName = fileInfo.Name;
+                    item.RelativePath = relPath;
+                    item.Extension = fileInfo.Extension.ToLowerInvariant();
+                    item.Length = fileInfo.Length;
+                    item.LastWriteTime = fileInfo.LastWriteTime;
+                    results.Add(item);
+                    Interlocked.Increment(ref MatchedCount);
+                } catch {}
+            });
+        } catch (OperationCanceledException) {}
 
         var res = new List<SearchResultItemV2>(results);
         res.Sort((a, b) => string.Compare(a.RelativePath, b.RelativePath, StringComparison.OrdinalIgnoreCase));
         return res;
+    }
+
+    public static Task<List<SearchResultItemV2>> SearchAsync(string rootPath, string[] tokens, string[] excludeTokens, bool filterByDate, DateTime minDate, string[] extensions, bool matchWholeWord, bool matchSameLine, bool skipFileName, bool skipFileContent, bool matchRegex, System.Threading.CancellationToken ct) {
+        return Task.Run(() => Search(rootPath, tokens, excludeTokens, filterByDate, minDate, extensions, matchWholeWord, matchSameLine, skipFileName, skipFileContent, matchRegex, ct), ct);
+    }
+
+    public static List<SearchResultItemV2> Search(string rootPath, string[] tokens, bool filterByDate, DateTime minDate, string[] extensions, bool matchWholeWord, bool matchSameLine, bool skipFileName, bool skipFileContent) {
+        return Search(rootPath, tokens, null, filterByDate, minDate, extensions, matchWholeWord, matchSameLine, skipFileName, skipFileContent, false, System.Threading.CancellationToken.None);
     }
 
     public static List<SearchResultItemV2> Search(string rootPath, string[] tokens, bool filterByDate, DateTime minDate, string[] extensions, bool matchWholeWord, bool matchSameLine) {
@@ -966,7 +1095,7 @@ public class FastSearchEngineV2 {
         return Search(rootPath, tokens, filterModifiedLast5Days, minDate, extensions, false, false);
     }
 
-    public static List<MatchLocationV2> FindMatches(string content, string[] tokens, bool matchWholeWord, bool matchSameLine) {
+    public static List<MatchLocationV2> FindMatches(string content, string[] tokens, bool matchWholeWord, bool matchSameLine, bool matchRegex) {
         var list = new List<MatchLocationV2>();
         if (string.IsNullOrEmpty(content) || tokens == null || tokens.Length == 0) {
             return list;
@@ -992,6 +1121,38 @@ public class FastSearchEngineV2 {
         var tokensOnLine = new Dictionary<int, HashSet<string>>();
 
         foreach (var token in distinctTokens) {
+            if (matchRegex) {
+                Regex rx;
+                if (TryCompileRegex(token, out rx) && rx != null) {
+                    try {
+                        var matches = rx.Matches(searchContent);
+                        foreach (Match m in matches) {
+                            int line = 1;
+                            for (int l = lineOffsets.Count - 1; l >= 0; l--) {
+                                if (m.Index >= lineOffsets[l]) {
+                                    line = l + 1;
+                                    break;
+                                }
+                            }
+                            var loc = new MatchLocationV2();
+                            loc.Index = m.Index;
+                            loc.Length = m.Length;
+                            loc.LineNumber = line;
+                            loc.Token = m.Value;
+                            list.Add(loc);
+
+                            HashSet<string> lineToks;
+                            if (!tokensOnLine.TryGetValue(line, out lineToks)) {
+                                lineToks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                                tokensOnLine[line] = lineToks;
+                            }
+                            lineToks.Add(token);
+                        }
+                    } catch {}
+                }
+                continue;
+            }
+
             int startIndex = 0;
             while (startIndex <= searchContent.Length - token.Length) {
                 int found = searchContent.IndexOf(token, startIndex, StringComparison.OrdinalIgnoreCase);
@@ -1039,12 +1200,16 @@ public class FastSearchEngineV2 {
         return list;
     }
 
+    public static List<MatchLocationV2> FindMatches(string content, string[] tokens, bool matchWholeWord, bool matchSameLine) {
+        return FindMatches(content, tokens, matchWholeWord, matchSameLine, false);
+    }
+
     public static List<MatchLocationV2> FindMatches(string content, string[] tokens, bool matchWholeWord) {
-        return FindMatches(content, tokens, matchWholeWord, false);
+        return FindMatches(content, tokens, matchWholeWord, false, false);
     }
 
     public static List<MatchLocationV2> FindMatches(string content, string[] tokens) {
-        return FindMatches(content, tokens, false, false);
+        return FindMatches(content, tokens, false, false, false);
     }
 }
 "@
@@ -1058,12 +1223,12 @@ public class FastSearchEngineV2 {
 # ── 4. Configuration and Persistence (config.json) ──────────────────────────
 $script:ScriptDir = if ($PSScriptRoot) {
     $PSScriptRoot
-} elseif ($MyInvocation.MyCommand.Path) {
-    Split-Path -Parent $MyInvocation.MyCommand.Path
 } elseif ($PSCommandPath) {
     Split-Path -Parent $PSCommandPath
+} elseif ($MyInvocation.MyCommand -is [System.Management.Automation.ExternalScriptInfo] -and $MyInvocation.MyCommand.Path) {
+    Split-Path -Parent $MyInvocation.MyCommand.Path
 } else {
-    'D:\Skrypty\Mnich_Adam_Skrypty\!Helper\FastSearcher'
+    'D:\Skrypty\FastSearcher'
 }
 $script:ConfigFile = Join-Path $script:ScriptDir 'config.json'
 
@@ -1084,6 +1249,7 @@ function Get-AppConfig {
         MatchSameLine           = $false
         SkipFileName            = $false
         SkipFileContent         = $false
+        MatchRegex              = $false
         SearchDebounceMs        = 750
     }
 
@@ -1105,6 +1271,7 @@ function Get-AppConfig {
             if ($null -ne $saved.MatchSameLine) { $cfg.MatchSameLine = [bool]$saved.MatchSameLine }
             if ($null -ne $saved.SkipFileName) { $cfg.SkipFileName = [bool]$saved.SkipFileName }
             if ($null -ne $saved.SkipFileContent) { $cfg.SkipFileContent = [bool]$saved.SkipFileContent }
+            if ($null -ne $saved.MatchRegex) { $cfg.MatchRegex = [bool]$saved.MatchRegex }
             if ($saved.SearchDebounceMs) { $cfg.SearchDebounceMs = [int]$saved.SearchDebounceMs }
             if ($saved.Theme -and $saved.Theme -in @('Dark','Light')) { $cfg.Theme = [string]$saved.Theme }
         } catch {
@@ -1128,6 +1295,7 @@ function Save-AppConfig {
         [bool]$MatchSameLine = $false,
         [bool]$SkipFileName = $false,
         [bool]$SkipFileContent = $false,
+        [bool]$MatchRegex = $false,
         [int]$SearchDebounceMs = 0
     )
     $langToSave     = if ($Language)         { $Language }         elseif ($script:Config -and $script:Config.Language)  { $script:Config.Language }  else { 'en' }
@@ -1149,6 +1317,7 @@ function Save-AppConfig {
         MatchSameLine           = $MatchSameLine
         SkipFileName            = $SkipFileName
         SkipFileContent         = $SkipFileContent
+        MatchRegex              = $MatchRegex
         SearchDebounceMs        = $debounceToSave
     }
     try {
@@ -1585,14 +1754,16 @@ function Get-UiString {
                                 Background="Transparent" Foreground="{DynamicResource TextSecondary}" FontSize="11" ToolTip="Clear query"/>
                     </Grid>
                     <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="4,0,8,0">
-                        <CheckBox Name="chkWholeWord" Content="Whole word" VerticalAlignment="Center" Margin="0,0,10,0"
+                        <CheckBox Name="chkWholeWord" Content="Whole word" VerticalAlignment="Center" Margin="0,0,8,0"
                                   FontSize="12" ToolTip="Match whole words only (e.g. 'DR' will not match 'poDRill')"/>
-                        <CheckBox Name="chkSameLine" Content="Same line" VerticalAlignment="Center" Margin="0,0,10,0"
+                        <CheckBox Name="chkSameLine" Content="Same line" VerticalAlignment="Center" Margin="0,0,8,0"
                                   FontSize="12" ToolTip="All search phrases must appear on the same line"/>
-                        <CheckBox Name="chkSkipFileName" Content="Skip file name" VerticalAlignment="Center" Margin="0,0,10,0"
+                        <CheckBox Name="chkSkipFileName" Content="Skip file name" VerticalAlignment="Center" Margin="0,0,8,0"
                                   FontSize="12" ToolTip="Exclude file names from search (search content only)"/>
-                        <CheckBox Name="chkSkipFileContent" Content="Skip content" VerticalAlignment="Center" Margin="0,0,4,0"
+                        <CheckBox Name="chkSkipFileContent" Content="Skip content" VerticalAlignment="Center" Margin="0,0,8,0"
                                   FontSize="12" ToolTip="Exclude file contents from search (search file names only)"/>
+                        <CheckBox Name="chkRegex" Content="Regex" VerticalAlignment="Center" Margin="0,0,4,0"
+                                  FontSize="12" ToolTip="Match tokens as regular expressions"/>
                     </StackPanel>
                     <Button Name="btnSearch" Grid.Column="3" Content="🔍 Search (Enter)" Height="30" Padding="16,4" FontWeight="Bold" Margin="0,0,4,0"/>
                     <Button Name="btnReset"  Grid.Column="4" Content="↺ Reset" Background="{DynamicResource BtnSecondary}" Foreground="{DynamicResource TextPrimary}" Height="30" Padding="10,4"/>
@@ -1661,6 +1832,7 @@ function Get-UiString {
                           ItemTemplate="{StaticResource NodeTemplate}"
                           ItemContainerStyle="{StaticResource ModernTreeViewItemStyle}"
                           BorderThickness="0" Background="{DynamicResource BgWindow}"
+                          ScrollViewer.CanContentScroll="True"
                           VirtualizingStackPanel.IsVirtualizing="True"
                           VirtualizingStackPanel.VirtualizationMode="Recycling">
                     <TreeView.ContextMenu>
@@ -1785,6 +1957,7 @@ function Get-UiString {
         <Border Grid.Row="2" Background="{DynamicResource BgPanelDark}" BorderBrush="{DynamicResource BrdrMain}" BorderThickness="0,1,0,0" Padding="12,5">
             <Grid>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <ProgressBar Name="pbSearchProgress" IsIndeterminate="True" Width="80" Height="14" Margin="0,0,10,0" Visibility="Collapsed" VerticalAlignment="Center"/>
                     <TextBlock Name="lblStatus" Text="Ready to search." Foreground="{DynamicResource TextSecondary}" FontSize="11.5"/>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
@@ -1813,6 +1986,8 @@ $chkWholeWord        = $window.FindName("chkWholeWord")
 $chkSameLine         = $window.FindName("chkSameLine")
 $chkSkipFileName     = $window.FindName("chkSkipFileName")
 $chkSkipFileContent  = $window.FindName("chkSkipFileContent")
+$chkRegex            = $window.FindName("chkRegex")
+$pbSearchProgress    = $window.FindName("pbSearchProgress")
 $btnSearch           = $window.FindName("btnSearch")
 $btnReset            = $window.FindName("btnReset")
 
@@ -1860,6 +2035,24 @@ $lblStatusRight      = $window.FindName("lblStatusRight")
 $lblTopStats         = $window.FindName("lblTopStats")
 $btnThemeToggle      = $window.FindName("btnThemeToggle")
 
+# Explicit script-scope UI aliases to guarantee access across background runspaces, dispatchers, and timers
+$script:treeResults        = $treeResults
+$script:lblStatus          = $lblStatus
+$script:lblStatusRight     = $lblStatusRight
+$script:lblTopStats        = $lblTopStats
+$script:lblResultBadge     = $lblResultBadge
+$script:btnSearch          = $btnSearch
+$script:pbSearchProgress   = $pbSearchProgress
+$script:txtFolder          = $txtFolder
+$script:txtSearch          = $txtSearch
+$script:dpModifiedSince    = $dpModifiedSince
+$script:chkWholeWord       = $chkWholeWord
+$script:chkSameLine        = $chkSameLine
+$script:chkSkipFileName    = $chkSkipFileName
+$script:chkSkipFileContent = $chkSkipFileContent
+$script:chkRegex           = $chkRegex
+$script:btnClearDate       = $btnClearDate
+
 # Controls used for UI localization (labels/headers with no other logic dependency)
 $lblHeaderSubtitle   = $window.FindName("lblHeaderSubtitle")
 $lblLanguageLabel    = $window.FindName("lblLanguageLabel")
@@ -1879,15 +2072,19 @@ $menuCopyFullPath    = $window.FindName("menuCopyFullPath")
 $menuCopyRelPath     = $window.FindName("menuCopyRelPath")
 
 # ── 7. Application state variables ───────────────────────────────────────────
-$script:CurrentFolder        = $script:Config.SearchFolder
-$script:CurrentResults       = @()
-$script:CurrentTokens        = @()
-$script:CurrentMatches       = @()
-$script:CurrentMatchIndex    = 0
-$script:SelectedFilePath     = $null
-$script:RootTreeNode         = $null
-$script:PreviousExtensions   = @()
-$script:CurrentTheme         = if ($script:Config.Theme -in @('Dark','Light')) { $script:Config.Theme } else { 'Dark' }
+$script:CurrentFolder          = $script:Config.SearchFolder
+$script:CurrentResults         = @()
+$script:CurrentTokens          = @()
+$script:CurrentExcludeTokens   = @()
+$script:CurrentMatches         = @()
+$script:CurrentMatchIndex      = 0
+$script:SelectedFilePath       = $null
+$script:RootTreeNode           = $null
+$script:PreviousExtensions     = @()
+$script:CurrentTheme           = if ($script:Config.Theme -in @('Dark','Light')) { $script:Config.Theme } else { 'Dark' }
+$script:CurrentLanguage        = if ($script:Config.Language) { $script:Config.Language } else { 'en' }
+$script:IsWindowLoaded         = $false
+$script:SuppressDebounceSearch = $false
 
 function Get-ConfiguredExtensions {
     $raw = if ($txtExtensions) { $txtExtensions.Text } else { '' }
@@ -2096,6 +2293,11 @@ if ($null -ne $script:Config.SkipFileContent) {
 } else {
     $chkSkipFileContent.IsChecked = $false
 }
+if ($null -ne $script:Config.MatchRegex) {
+    $chkRegex.IsChecked = [bool]$script:Config.MatchRegex
+} else {
+    $chkRegex.IsChecked = $false
+}
 
 # Populate the language selector from the loaded catalog
 foreach ($code in $script:LanguagesCatalog.Keys) {
@@ -2146,7 +2348,7 @@ function Set-UiLanguage {
     $btnOpenFolder.Content     = Get-UiString 'BtnOpenFolder' '📂 Open'
     $lblSearchLabel.Text       = Get-UiString 'LabelSearch' 'Search:'
     $btnClearSearch.ToolTip    = Get-UiString 'TooltipClearSearch' 'Clear query'
-    $btnSearch.Content         = Get-UiString 'BtnSearch' '🔍 Search (Enter)'
+    $btnSearch.Content         = if ($btnSearch.Tag -eq 'Cancel') { Get-UiString 'BtnCancel' '🛑 Cancel' } else { Get-UiString 'BtnSearch' '🔍 Search (Enter)' }
     $btnReset.Content          = Get-UiString 'BtnReset' '↺ Reset'
     if ($chkWholeWord) {
         $chkWholeWord.Content  = Get-UiString 'ChkWholeWord' 'Whole word'
@@ -2163,6 +2365,10 @@ function Set-UiLanguage {
     if ($chkSkipFileContent) {
         $chkSkipFileContent.Content = Get-UiString 'ChkSkipFileContent' 'Skip content'
         $chkSkipFileContent.ToolTip = Get-UiString 'TooltipSkipFileContent' 'Exclude file contents from search (search file names only)'
+    }
+    if ($chkRegex) {
+        $chkRegex.Content      = Get-UiString 'ChkRegex' 'Regex'
+        $chkRegex.ToolTip      = Get-UiString 'TooltipRegex' 'Match tokens as regular expressions'
     }
     if ($lblDateFilterLabel) { $lblDateFilterLabel.Text  = Get-UiString 'LabelDateFilter' 'Modified since:' }
     if ($dpModifiedSince)    { $dpModifiedSince.ToolTip = Get-UiString 'TooltipDateFilter' 'Filter files modified on or after this date. Leave empty for all files.' }
@@ -2207,11 +2413,22 @@ function Set-UiLanguage {
 
 function Update-TokenLabels {
     $rawQuery = $txtSearch.Text
-    $tokens = [FastSearchEngineV2]::ParseTokens($rawQuery)
-    $script:CurrentTokens = $tokens
-    if ($tokens -and $tokens.Length -gt 0) {
-        $formatted = ($tokens | ForEach-Object { "[$_]" }) -join ' '
-        $lblTokens.Text = (Get-UiString 'TokensFormat' 'Phrases ({0}): {1}') -f $tokens.Length, $formatted
+    $isRegex = ($chkRegex -and $chkRegex.IsChecked -eq $true)
+    $parsed = [FastSearchEngineV2]::ParseQuery($rawQuery, $isRegex)
+    $script:CurrentTokens = $parsed.IncludeTokens
+    $script:CurrentExcludeTokens = $parsed.ExcludeTokens
+
+    $incParts = if ($parsed.IncludeTokens -and $parsed.IncludeTokens.Length -gt 0) {
+        $parsed.IncludeTokens | ForEach-Object { "[$_]" }
+    } else { @() }
+    $excParts = if ($parsed.ExcludeTokens -and $parsed.ExcludeTokens.Length -gt 0) {
+        $parsed.ExcludeTokens | ForEach-Object { "-[$_]" }
+    } else { @() }
+
+    $allParts = @($incParts) + @($excParts)
+    if ($allParts.Length -gt 0) {
+        $formatted = $allParts -join ' '
+        $lblTokens.Text = (Get-UiString 'TokensFormat' 'Phrases ({0}): {1}') -f $allParts.Length, $formatted
     } else {
         $lblTokens.Text = Get-UiString 'TokensNone' 'Phrases: (all files)'
     }
@@ -2277,7 +2494,6 @@ function Show-FilePreview($filePath) {
     $lblFileSize.Text = "{0:N1} KB" -f ($fileInfo.Length / 1024.0)
     $lblModifiedDate.Text = $fileInfo.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
 
-
     try {
         # For OOXML / ODF / Legacy / PDF formats use the C# extractor; for all other formats read as plain text
         $script:OfficePreviewExts = @('.xlsx','.xlsm','.xltx','.docx','.docm','.dotx','.pptx','.pptm','.odt','.ods','.odp','.odg','.ott','.otp','.ots','.xls','.xlt','.doc','.dot','.ppt','.pot','.pdf')
@@ -2293,12 +2509,13 @@ function Show-FilePreview($filePath) {
         $lines = [System.Text.RegularExpressions.Regex]::Matches($content, "`n").Count + 1
         $lblLineCount.Text = "{0:N0} {1}" -f $lines, (Get-UiString 'NounLines' 'lines')
 
-        # Search for match locations in the content
+        # Search for match locations in the content (only for include tokens)
         $tokens = $script:CurrentTokens
         if ($tokens -and $tokens.Length -gt 0) {
             $isWhole = ($chkWholeWord.IsChecked -eq $true)
             $isSameLine = ($chkSameLine.IsChecked -eq $true)
-            $matches = [FastSearchEngineV2]::FindMatches($content, $tokens, $isWhole, $isSameLine)
+            $isRegex = ($chkRegex -and $chkRegex.IsChecked -eq $true)
+            $matches = [FastSearchEngineV2]::FindMatches($content, $tokens, $isWhole, $isSameLine, $isRegex)
             $script:CurrentMatches = $matches
 
             if ($matches.Count -gt 0) {
@@ -2320,7 +2537,161 @@ function Show-FilePreview($filePath) {
     }
 }
 
+# ── Search background execution & Dispatcher timer coordination ─────────────
+$script:CurrentSearchTask        = $null
+$script:CurrentCts               = $null
+$script:CurrentSearchFolder      = $null
+$script:CurrentSearchExts        = $null
+$script:CurrentSearchIsWhole     = $false
+$script:CurrentSearchIsSameLine  = $false
+$script:CurrentSearchIsSkipFileName = $false
+$script:CurrentSearchIsSkipFileContent = $false
+$script:CurrentSearchIsRegex     = $false
+$script:SearchStopwatch          = $null
+$script:TotalStopwatch           = $null
+
+$script:SearchProgressTickAction = {
+    try {
+        $curTask = $script:CurrentSearchTask
+        $curCts  = $script:CurrentCts
+
+        if ($curCts -and $curCts.IsCancellationRequested) {
+            if ($script:SearchProgressTimer -and $script:SearchProgressTimer.IsEnabled) {
+                $script:SearchProgressTimer.Stop()
+            }
+            if ($script:pbSearchProgress) { $script:pbSearchProgress.Visibility = [System.Windows.Visibility]::Collapsed }
+            if ($script:btnSearch) {
+                $script:btnSearch.Content = Get-UiString 'BtnSearch' '🔍 Search (Enter)'
+                $script:btnSearch.Tag = $null
+            }
+            [System.Windows.Input.Mouse]::OverrideCursor = $null
+            [System.Windows.Input.Mouse]::UpdateCursor()
+            if ($script:lblStatus) { $script:lblStatus.Text = Get-UiString 'StatusCancelled' 'Search cancelled.' }
+            return
+        }
+
+        # Update live progress numbers
+        $scanned = [FastSearchEngineV2]::ScannedCount
+        $matched = [FastSearchEngineV2]::MatchedCount
+        if ($script:lblStatus) {
+            $script:lblStatus.Text = (Get-UiString 'StatusSearchingProgress' 'Searching... ({0} scanned, {1} matches)') -f ("{0:N0}" -f $scanned), ("{0:N0}" -f $matched)
+        }
+
+        if ($curTask -and $curTask.IsCompleted) {
+            if ($script:SearchProgressTimer -and $script:SearchProgressTimer.IsEnabled) {
+                $script:SearchProgressTimer.Stop()
+            }
+            if ($script:SearchStopwatch) { $script:SearchStopwatch.Stop() }
+            if ($script:pbSearchProgress) { $script:pbSearchProgress.Visibility = [System.Windows.Visibility]::Collapsed }
+            if ($script:btnSearch) {
+                $script:btnSearch.Content = Get-UiString 'BtnSearch' '🔍 Search (Enter)'
+                $script:btnSearch.Tag = $null
+            }
+            [System.Windows.Input.Mouse]::OverrideCursor = $null
+            [System.Windows.Input.Mouse]::UpdateCursor()
+
+            if ($curCts -and $curCts.IsCancellationRequested) {
+                if ($script:lblStatus) { $script:lblStatus.Text = Get-UiString 'StatusCancelled' 'Search cancelled.' }
+                return
+            }
+
+            if ($curTask.IsFaulted) {
+                if ($script:lblStatus) {
+                    $script:lblStatus.Text = (Get-UiString 'StatusReadError' 'Error reading file: {0}') -f $curTask.Exception.GetBaseException().Message
+                }
+                return
+            }
+
+            $results = $curTask.Result
+            $searchMs = if ($script:SearchStopwatch) { $script:SearchStopwatch.ElapsedMilliseconds } else { 0 }
+            $script:CurrentResults = $results
+            $count = if ($results) { $results.Count } else { 0 }
+            $folder = $script:CurrentSearchFolder
+
+            if ($count -eq 0) {
+                if ($script:treeResults) { $script:treeResults.ItemsSource = $null }
+                $script:RootTreeNode = $null
+                if ($script:TotalStopwatch) { $script:TotalStopwatch.Stop() }
+                $totalMs = if ($script:TotalStopwatch) { $script:TotalStopwatch.ElapsedMilliseconds } else { $searchMs }
+                if ($script:lblResultBadge) { $script:lblResultBadge.Text = Get-FileCountLabel 0 }
+                if ($script:lblStatus) {
+                    $script:lblStatus.Text = ((Get-UiString 'StatusNoResults' 'No results in {0} ms.') -f $searchMs) +
+                                             ("  |  Total: {0} ms" -f $totalMs)
+                }
+                if ($script:lblTopStats) {
+                    $script:lblTopStats.Text = (Get-UiString 'TopStatsNoResultsFormat' '{0} ({1} ms)') -f (Get-FileCountLabel 0), $searchMs
+                }
+            } else {
+                $hasTokens = (($script:CurrentTokens -and $script:CurrentTokens.Length -gt 0) -or ($script:CurrentExcludeTokens -and $script:CurrentExcludeTokens.Length -gt 0))
+                $autoExpand = $hasTokens -and ($count -le 500)
+                $rootNode = [FileNodeV2]::BuildTree($folder, $results, $autoExpand)
+                $script:RootTreeNode = $rootNode
+
+                $list = [System.Collections.Generic.List[FileNodeV2]]::new()
+                $list.Add($rootNode)
+                if ($script:treeResults) { $script:treeResults.ItemsSource = $list }
+                if ($script:TotalStopwatch) { $script:TotalStopwatch.Stop() }
+                $totalMs = if ($script:TotalStopwatch) { $script:TotalStopwatch.ElapsedMilliseconds } else { $searchMs }
+
+                if ($script:lblResultBadge) { $script:lblResultBadge.Text = Get-FileCountLabel $count }
+                if ($script:lblTopStats) {
+                    $script:lblTopStats.Text = (Get-UiString 'TopStatsFoundFormat' 'Found: {0} ({1} ms)') -f $count, $searchMs
+                }
+                if ($script:lblStatus) {
+                    $script:lblStatus.Text = ((Get-UiString 'StatusResultsFound' 'Found {0} files in {1} ms in directory {2}') -f $count, $searchMs, $folder) +
+                                             ("  |  Total: {0} ms" -f $totalMs)
+                }
+            }
+
+            # Save the last search query and filter preferences
+            Save-AppConfig -SearchFolder $folder -FilterModifiedSince $script:dpModifiedSince.SelectedDate -FileExtensions $script:CurrentSearchExts -LastSearchQuery $script:txtSearch.Text -MatchWholeWord $script:CurrentSearchIsWhole -MatchSameLine $script:CurrentSearchIsSameLine -SkipFileName $script:CurrentSearchIsSkipFileName -SkipFileContent $script:CurrentSearchIsSkipFileContent -MatchRegex $script:CurrentSearchIsRegex
+        }
+    } catch {
+        if ($script:SearchProgressTimer -and $script:SearchProgressTimer.IsEnabled) {
+            $script:SearchProgressTimer.Stop()
+        }
+        if ($script:pbSearchProgress) { $script:pbSearchProgress.Visibility = [System.Windows.Visibility]::Collapsed }
+        if ($script:btnSearch) {
+            $script:btnSearch.Content = Get-UiString 'BtnSearch' '🔍 Search (Enter)'
+            $script:btnSearch.Tag = $null
+        }
+        [System.Windows.Input.Mouse]::OverrideCursor = $null
+        [System.Windows.Input.Mouse]::UpdateCursor()
+        if ($script:lblStatus) { $script:lblStatus.Text = "Error: " + $_.Exception.Message }
+    }
+}
+
+$script:SearchProgressTimer = [System.Windows.Threading.DispatcherTimer]::new([System.Windows.Threading.DispatcherPriority]::Normal)
+$script:SearchProgressTimer.Interval = [TimeSpan]::FromMilliseconds(40)
+$script:SearchProgressTimer.Add_Tick({
+    if ($script:SearchProgressTickAction) {
+        & $script:SearchProgressTickAction
+    }
+})
+
+function Stop-CurrentSearch {
+    if ($script:CurrentCts) {
+        try {
+            $script:CurrentCts.Cancel()
+        } catch {}
+    }
+    if ($script:SearchProgressTimer -and $script:SearchProgressTimer.IsEnabled) {
+        $script:SearchProgressTimer.Stop()
+    }
+    if ($script:pbSearchProgress) {
+        $script:pbSearchProgress.Visibility = [System.Windows.Visibility]::Collapsed
+    }
+    if ($script:btnSearch) {
+        $script:btnSearch.Content = Get-UiString 'BtnSearch' '🔍 Search (Enter)'
+        $script:btnSearch.Tag = $null
+    }
+    [System.Windows.Input.Mouse]::OverrideCursor = $null
+    [System.Windows.Input.Mouse]::UpdateCursor()
+}
+
 function Invoke-ScriptSearch {
+    Stop-CurrentSearch
+
     $folder = $txtFolder.Text.Trim()
     if ([string]::IsNullOrWhiteSpace($folder) -or -not (Test-Path -LiteralPath $folder)) {
         [System.Windows.MessageBox]::Show((Get-UiString 'MsgFolderNotExist' "Specified folder does not exist:`n{0}") -f $folder, (Get-UiString 'MsgFolderNotExistTitle' 'FastSearcher'), "OK", "Warning")
@@ -2336,62 +2707,41 @@ function Invoke-ScriptSearch {
     $filterByDate = ($null -ne $dpModifiedSince.SelectedDate)
     $minDate = if ($filterByDate) { [DateTime]$dpModifiedSince.SelectedDate } else { [DateTime]::MinValue }
     $tokens = $script:CurrentTokens
+    $excludeTokens = $script:CurrentExcludeTokens
     $isWhole = ($chkWholeWord.IsChecked -eq $true)
     $isSameLine = ($chkSameLine.IsChecked -eq $true)
     $isSkipFileName = ($chkSkipFileName.IsChecked -eq $true)
     $isSkipFileContent = ($chkSkipFileContent.IsChecked -eq $true)
+    $isRegex = ($chkRegex -and $chkRegex.IsChecked -eq $true)
+
+    $script:CurrentSearchFolder           = $folder
+    $script:CurrentSearchExts             = $exts
+    $script:CurrentSearchIsWhole          = $isWhole
+    $script:CurrentSearchIsSameLine       = $isSameLine
+    $script:CurrentSearchIsSkipFileName   = $isSkipFileName
+    $script:CurrentSearchIsSkipFileContent = $isSkipFileContent
+    $script:CurrentSearchIsRegex          = $isRegex
 
     $lblStatus.Text = (Get-UiString 'StatusSearching' 'Searching files in {0}...') -f $folder
+    if ($pbSearchProgress) { $pbSearchProgress.Visibility = [System.Windows.Visibility]::Visible }
+    $btnSearch.Content = Get-UiString 'BtnCancel' '🛑 Cancel'
+    $btnSearch.Tag = 'Cancel'
     [System.Windows.Input.Mouse]::OverrideCursor = [System.Windows.Input.Cursors]::Wait
     [System.Windows.Input.Mouse]::UpdateCursor()
-    [System.Windows.Forms.Application]::DoEvents()
 
-    try {
-        # swSearch: measures only the parallel C# file scan
-        $swSearch = [System.Diagnostics.Stopwatch]::StartNew()
-        $results = [FastSearchEngineV2]::Search($folder, $tokens, $filterByDate, $minDate, $exts, $isWhole, $isSameLine, $isSkipFileName, $isSkipFileContent)
-        $swSearch.Stop()
-        # swTotal: continues through BuildTree + WPF binding to capture total GUI-blocking time
-        $swTotal = [System.Diagnostics.Stopwatch]::StartNew()
+    $script:SearchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $script:TotalStopwatch  = [System.Diagnostics.Stopwatch]::StartNew()
+    $cts = [System.Threading.CancellationTokenSource]::new()
+    $script:CurrentCts = $cts
 
-        $script:CurrentResults = $results
-        $count = $results.Count
+    $task = [FastSearchEngineV2]::SearchAsync($folder, $tokens, $excludeTokens, $filterByDate, $minDate, $exts, $isWhole, $isSameLine, $isSkipFileName, $isSkipFileContent, $isRegex, $cts.Token)
+    $script:CurrentSearchTask = $task
 
-        if ($count -eq 0) {
-            $treeResults.ItemsSource = $null
-            $script:RootTreeNode = $null
-            $swTotal.Stop()
-            $lblResultBadge.Text = Get-FileCountLabel 0
-            $lblStatus.Text = (Get-UiString 'StatusNoResults' 'No results in {0} ms.') -f $swSearch.ElapsedMilliseconds
-            $lblTopStats.Text = (Get-UiString 'TopStatsNoResultsFormat' '{0} ({1} ms)') -f (Get-FileCountLabel 0), $swSearch.ElapsedMilliseconds
-        } else {
-            # When no tokens are entered the result set can be huge (all files).
-            # Building the tree collapsed avoids rendering thousands of WPF nodes at once,
-            # which would block the UI thread for several seconds.
-            $hasTokens = ($tokens -and $tokens.Length -gt 0)
-            $autoExpand = $hasTokens -and ($count -le 500)
-            $rootNode = [FileNodeV2]::BuildTree($folder, $results, $autoExpand)
-            $script:RootTreeNode = $rootNode
-
-            $list = [System.Collections.Generic.List[FileNodeV2]]::new()
-            $list.Add($rootNode)
-            $treeResults.ItemsSource = $list
-            $swTotal.Stop()
-
-            $lblResultBadge.Text = Get-FileCountLabel $count
-            # Top badge: search-only time (fast C# scan)
-            $lblTopStats.Text = (Get-UiString 'TopStatsFoundFormat' 'Found: {0} ({1} ms)') -f $count, $swSearch.ElapsedMilliseconds
-            # Bottom status bar: total time from search start to GUI ready
-            $lblStatus.Text = ((Get-UiString 'StatusResultsFound' 'Found {0} files in {1} ms in directory {2}') -f $count, $swSearch.ElapsedMilliseconds, $folder) +
-                              ("  |  Total: {0} ms" -f $swTotal.ElapsedMilliseconds)
-        }
-    } finally {
-        [System.Windows.Input.Mouse]::OverrideCursor = $null
-        [System.Windows.Input.Mouse]::UpdateCursor()
+    if ($task.IsCompleted) {
+        & $script:SearchProgressTickAction
+    } else {
+        $script:SearchProgressTimer.Start()
     }
-
-    # Save the last search query, date filter, whole word, and same line preference
-    Save-AppConfig -SearchFolder $folder -FilterModifiedSince $dpModifiedSince.SelectedDate -FileExtensions $exts -LastSearchQuery $txtSearch.Text -MatchWholeWord $isWhole -MatchSameLine $isSameLine -SkipFileName $isSkipFileName -SkipFileContent $isSkipFileContent
 }
 
 # ── 9. UI events and interactions ────────────────────────────────────────────
@@ -2407,16 +2757,40 @@ $script:SearchDebounceTimer.Add_Tick({
 
 $script:SuppressDebounceSearch = $false
 
-# Search on click or Enter
+# Search button click: handles both Search and Cancel
 $btnSearch.Add_Click({
+    if ($btnSearch.Tag -eq 'Cancel') {
+        Stop-CurrentSearch
+        $lblStatus.Text = Get-UiString 'StatusCancelled' 'Search cancelled.'
+        return
+    }
     $script:SearchDebounceTimer.Stop()
     Invoke-ScriptSearch
 })
+
+# Enter / Escape key handling
 $txtSearch.Add_KeyDown({
     param($s, $e)
-    if ($e.Key -eq [System.Windows.Input.Key]::Enter) {
+    if ($e.Key -eq [System.Windows.Input.Key]::Escape) {
+        if ($script:CurrentSearchTask -and -not $script:CurrentSearchTask.IsCompleted) {
+            Stop-CurrentSearch
+            $lblStatus.Text = Get-UiString 'StatusCancelled' 'Search cancelled.'
+            $e.Handled = $true
+        }
+    } elseif ($e.Key -eq [System.Windows.Input.Key]::Enter) {
         $script:SearchDebounceTimer.Stop()
         Invoke-ScriptSearch
+    }
+})
+
+$window.Add_KeyDown({
+    param($s, $e)
+    if ($e.Key -eq [System.Windows.Input.Key]::Escape) {
+        if ($script:CurrentSearchTask -and -not $script:CurrentSearchTask.IsCompleted) {
+            Stop-CurrentSearch
+            $lblStatus.Text = Get-UiString 'StatusCancelled' 'Search cancelled.'
+            $e.Handled = $true
+        }
     }
 })
 
@@ -2450,6 +2824,7 @@ $btnReset.Add_Click({
     if ($chkSameLine) { $chkSameLine.IsChecked = $false }
     if ($chkSkipFileName) { $chkSkipFileName.IsChecked = $false }
     if ($chkSkipFileContent) { $chkSkipFileContent.IsChecked = $false }
+    if ($chkRegex) { $chkRegex.IsChecked = $false }
     $dpModifiedSince.SelectedDate = $null
     if ($btnClearDate) { $btnClearDate.Visibility = [System.Windows.Visibility]::Collapsed }
     $txtExtensions.Text = '*.ps1, *.md'
@@ -2490,6 +2865,15 @@ if ($chkSkipFileContent) {
         if ($chkSkipFileContent.IsChecked -eq $true -and $chkSkipFileName.IsChecked -eq $true) {
             $chkSkipFileName.IsChecked = $false
         }
+        if ($script:IsWindowLoaded) {
+            $script:SearchDebounceTimer.Stop()
+            $script:SearchDebounceTimer.Start()
+        }
+    })
+}
+if ($chkRegex) {
+    $chkRegex.Add_Click({
+        Update-TokenLabels
         if ($script:IsWindowLoaded) {
             $script:SearchDebounceTimer.Stop()
             $script:SearchDebounceTimer.Start()
@@ -2694,7 +3078,7 @@ $btnBrowse.Add_Click({
     if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         $txtFolder.Text = $dialog.SelectedPath
         $script:CurrentFolder = $dialog.SelectedPath
-        Save-AppConfig -SearchFolder $dialog.SelectedPath -FilterModifiedSince $dpModifiedSince.SelectedDate -LastSearchQuery $txtSearch.Text -MatchWholeWord ($chkWholeWord.IsChecked -eq $true) -MatchSameLine ($chkSameLine.IsChecked -eq $true) -SkipFileName ($chkSkipFileName.IsChecked -eq $true) -SkipFileContent ($chkSkipFileContent.IsChecked -eq $true)
+        Save-AppConfig -SearchFolder $dialog.SelectedPath -FilterModifiedSince $dpModifiedSince.SelectedDate -LastSearchQuery $txtSearch.Text -MatchWholeWord ($chkWholeWord.IsChecked -eq $true) -MatchSameLine ($chkSameLine.IsChecked -eq $true) -SkipFileName ($chkSkipFileName.IsChecked -eq $true) -SkipFileContent ($chkSkipFileContent.IsChecked -eq $true) -MatchRegex ($chkRegex.IsChecked -eq $true)
         $lblStatusRight.Text = "$($dialog.SelectedPath) | UTF-8 with BOM"
         Invoke-ScriptSearch
     }
@@ -2704,7 +3088,7 @@ $btnBrowse.Add_Click({
 $btnSaveDefault.Add_Click({
     $folder = $txtFolder.Text.Trim()
     if (Test-Path -LiteralPath $folder) {
-        Save-AppConfig -SearchFolder $folder -FilterModifiedSince $dpModifiedSince.SelectedDate -LastSearchQuery $txtSearch.Text -MatchWholeWord ($chkWholeWord.IsChecked -eq $true) -MatchSameLine ($chkSameLine.IsChecked -eq $true) -SkipFileName ($chkSkipFileName.IsChecked -eq $true) -SkipFileContent ($chkSkipFileContent.IsChecked -eq $true)
+        Save-AppConfig -SearchFolder $folder -FilterModifiedSince $dpModifiedSince.SelectedDate -LastSearchQuery $txtSearch.Text -MatchWholeWord ($chkWholeWord.IsChecked -eq $true) -MatchSameLine ($chkSameLine.IsChecked -eq $true) -SkipFileName ($chkSkipFileName.IsChecked -eq $true) -SkipFileContent ($chkSkipFileContent.IsChecked -eq $true) -MatchRegex ($chkRegex.IsChecked -eq $true)
         $lblStatus.Text = (Get-UiString 'StatusSavedDefault' "Saved '{0}' as default directory in config.json") -f $folder
         $lblStatusRight.Text = "$folder | UTF-8 with BOM"
     } else {
@@ -2891,7 +3275,7 @@ $cmbLanguage.Add_SelectionChanged({
     $selected = $cmbLanguage.SelectedItem
     if ($selected -and $selected.Tag -and $selected.Tag -ne $script:CurrentLanguage) {
         Set-UiLanguage -LanguageCode $selected.Tag
-        Save-AppConfig -SearchFolder $txtFolder.Text.Trim() -FilterModifiedSince $dpModifiedSince.SelectedDate -LastSearchQuery $txtSearch.Text -Language $selected.Tag -MatchWholeWord ($chkWholeWord.IsChecked -eq $true) -MatchSameLine ($chkSameLine.IsChecked -eq $true) -SkipFileName ($chkSkipFileName.IsChecked -eq $true) -SkipFileContent ($chkSkipFileContent.IsChecked -eq $true)
+        Save-AppConfig -SearchFolder $txtFolder.Text.Trim() -FilterModifiedSince $dpModifiedSince.SelectedDate -LastSearchQuery $txtSearch.Text -Language $selected.Tag -MatchWholeWord ($chkWholeWord.IsChecked -eq $true) -MatchSameLine ($chkSameLine.IsChecked -eq $true) -SkipFileName ($chkSkipFileName.IsChecked -eq $true) -SkipFileContent ($chkSkipFileContent.IsChecked -eq $true) -MatchRegex ($chkRegex.IsChecked -eq $true)
     }
 })
 
@@ -2899,7 +3283,7 @@ $cmbLanguage.Add_SelectionChanged({
 $btnThemeToggle.Add_Click({
     $newTheme = if ($script:CurrentTheme -eq 'Light') { 'Dark' } else { 'Light' }
     Apply-Theme -Theme $newTheme
-    Save-AppConfig -SearchFolder $txtFolder.Text.Trim() -FilterModifiedSince $dpModifiedSince.SelectedDate -LastSearchQuery $txtSearch.Text -Language $script:CurrentLanguage -Theme $newTheme -MatchWholeWord ($chkWholeWord.IsChecked -eq $true) -MatchSameLine ($chkSameLine.IsChecked -eq $true) -SkipFileName ($chkSkipFileName.IsChecked -eq $true) -SkipFileContent ($chkSkipFileContent.IsChecked -eq $true)
+    Save-AppConfig -SearchFolder $txtFolder.Text.Trim() -FilterModifiedSince $dpModifiedSince.SelectedDate -LastSearchQuery $txtSearch.Text -Language $script:CurrentLanguage -Theme $newTheme -MatchWholeWord ($chkWholeWord.IsChecked -eq $true) -MatchSameLine ($chkSameLine.IsChecked -eq $true) -SkipFileName ($chkSkipFileName.IsChecked -eq $true) -SkipFileContent ($chkSkipFileContent.IsChecked -eq $true) -MatchRegex ($chkRegex.IsChecked -eq $true)
 })
 
 # Window keyboard shortcuts (F3 / Shift+F3 to navigate matches, Ctrl+F to search)

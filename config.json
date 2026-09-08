@@ -7,12 +7,15 @@
     "FilterModifiedLast5Days":  false,
     "DaysModifiedFilter":  5,
     "SearchInSubfolders":  true,
-    "LastSearchQuery":  "Mnich",
+    "LastSearchQuery":  "Kohlschein",
     "AutoExpandTree":  true,
     "FontSize":  13,
     "Theme":  "Dark",
     "Language":  "en",
     "MatchWholeWord":  false,
     "MatchSameLine":  false,
+    "SkipFileName":  true,
+    "SkipFileContent":  false,
+    "MatchRegex":  false,
     "SearchDebounceMs":  750
 }

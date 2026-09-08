@@ -91,7 +91,7 @@ $CompileParams = @{
     Company     = 'Adam Mnich'
     Product     = 'FastSearcher'
     Copyright   = 'Copyright (c) 2026 Adam Mnich'
-    Version     = '1.1.0.0'
+    Version     = '1.3.0.0'
     NoError     = $true
     NoOutput    = $true
 }
