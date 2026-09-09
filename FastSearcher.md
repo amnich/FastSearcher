@@ -55,6 +55,7 @@ Aplikacja wykorzystuje wielowątkowy silnik w języku C# (`Parallel.ForEach`), c
    - **Wirtualizacja WPF** (`VirtualizingStackPanel.IsVirtualizing`, tryb `Recycling`): WPF renderuje tylko węzły widoczne w oknie, co eliminuje blokowanie GUI nawet przy tysiącach wyników.
    - **Inteligentny `autoExpand`**: drzewo jest automatycznie rozwijane tylko wtedy, gdy podano frazy wyszukiwania **i** wyników jest ≤ 500. Przy pustym zapytaniu lub dużej liczbie wyników drzewo startuje zwinięte, co zapobiega renderowaniu tysięcy węzłów naraz.
    - Przyciski `⊞ Rozwiń` oraz `⊟ Zwiń` do szybkiej kontroli widoku drzewa.
+   - **Podwójne kliknięcie na folderze**: dwukrotne kliknięcie na dowolnym folderze w drzewie (ikona, nazwa lub wiersz) natychmiast rozwija lub zwija jego zawartość, bez konieczności celowania w małą strzałkę chevronu.
 7. **Podgląd zawartości (Content Preview) z płynnym przewijaniem**:
    - Kliknięcie pliku w drzewie natychmiast ładuje jego zawartość po prawej stronie.
    - Prawidłowe przewijanie WPF (`ScrollToLine`) z 4 liniami kontekstu powyżej trafienia.

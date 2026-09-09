@@ -106,18 +106,29 @@ public class MatchLocationV2 {
     public string Token { get; set; }
 }
 
-public class FileNodeV2 {
+public class FileNodeV2 : System.ComponentModel.INotifyPropertyChanged {
     public string Name { get; set; }
     public string FullPath { get; set; }
     public bool IsFolder { get; set; }
     public string Icon { get; set; }
     public string Subtitle { get; set; }
-    public bool IsExpanded { get; set; }
+    private bool _isExpanded;
+    public bool IsExpanded {
+        get { return _isExpanded; }
+        set {
+            if (_isExpanded != value) {
+                _isExpanded = value;
+                var h = PropertyChanged;
+                if (h != null) h(this, new System.ComponentModel.PropertyChangedEventArgs("IsExpanded"));
+            }
+        }
+    }
     public List<FileNodeV2> Children { get; set; }
+    public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
 
     public FileNodeV2() {
         Children = new List<FileNodeV2>();
-        IsExpanded = true;
+        _isExpanded = true;
     }
 
     public static FileNodeV2 BuildTree(string rootPath, IEnumerable<SearchResultItemV2> files, bool autoExpand) {
@@ -3175,12 +3186,37 @@ $btnCollapseAll.Add_Click({
     }
 })
 
-# Double-click on a tree item opens the file
+# Double-click on a tree item:
+# - Folder: toggle collapse / expand
+# - File: open file in default application
 $treeResults.Add_MouseDoubleClick({
     param($s, $e)
-    $node = $treeResults.SelectedItem
-    if ($node -and -not $node.IsFolder -and (Test-Path -LiteralPath $node.FullPath)) {
+    # Find the clicked TreeViewItem container from the visual tree
+    $dep = $e.OriginalSource
+    $isExpanderClick = $false
+    while ($dep -and -not ($dep -is [System.Windows.Controls.TreeViewItem])) {
+        if ($dep -is [System.Windows.Controls.Primitives.ToggleButton]) {
+            $isExpanderClick = $true
+        }
+        $dep = [System.Windows.Media.VisualTreeHelper]::GetParent($dep)
+    }
+
+    $node = if ($dep -is [System.Windows.Controls.TreeViewItem]) { $dep.DataContext } else { $treeResults.SelectedItem }
+    if (-not $node) { return }
+
+    if ($node.IsFolder) {
+        # If double-clicked directly on the chevron arrow, the ToggleButton already handled expansion
+        if (-not $isExpanderClick) {
+            $newExpanded = -not $node.IsExpanded
+            $node.IsExpanded = $newExpanded
+            if ($dep -is [System.Windows.Controls.TreeViewItem]) {
+                $dep.IsExpanded = $newExpanded
+            }
+        }
+        $e.Handled = $true
+    } elseif (-not [string]::IsNullOrWhiteSpace($node.FullPath) -and (Test-Path -LiteralPath $node.FullPath)) {
         Start-Process -FilePath $node.FullPath
+        $e.Handled = $true
     }
 })
 

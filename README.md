@@ -107,6 +107,7 @@ Powered by an in-memory compiled C# parallel search engine ([FastSearchEngineV2]
   - 📄 Generic files
 - **Subtitles & Badges**: Each file node displays formatted file size (in KB) and last modification timestamp (`yyyy-MM-dd HH:mm`).
 - **Hardware-Accelerated UI Virtualization**: The TreeView employs `VirtualizingStackPanel.IsVirtualizing="True"`, `VirtualizingStackPanel.VirtualizationMode="Recycling"`, and `ScrollViewer.CanContentScroll="True"`, rendering only items visible in the current viewport to conserve memory and maintain smooth 60 FPS scrolling.
+- **Double-Click Interaction**: Double-clicking on any folder item (icon, folder name, or row) instantly expands or collapses its contents without requiring precise clicking on the chevron arrow. Double-clicking on any file opens it directly in its default associated Windows application.
 - **Tree Expansion Control**: Dedicated `⊞ Expand` and `⊟ Collapse` buttons for global tree navigation.
 
 ### 6. Content Previewer & Match Navigation
