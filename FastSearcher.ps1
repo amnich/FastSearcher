@@ -131,19 +131,35 @@ public class FileNodeV2 : System.ComponentModel.INotifyPropertyChanged {
         _isExpanded = true;
     }
 
+    private static string NormalizeDirectoryKey(string path) {
+        if (string.IsNullOrWhiteSpace(path)) return path;
+
+        string trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (string.IsNullOrEmpty(trimmed)) {
+            return path;
+        }
+
+        if (trimmed.Length == 2 && trimmed[1] == ':') {
+            return trimmed + Path.DirectorySeparatorChar;
+        }
+
+        return trimmed;
+    }
+
     public static FileNodeV2 BuildTree(string rootPath, IEnumerable<SearchResultItemV2> files, bool autoExpand) {
         var root = new FileNodeV2();
-        root.Name = Path.GetFileName(rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        string normalizedRoot = NormalizeDirectoryKey(rootPath);
+        root.Name = Path.GetFileName(normalizedRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         root.FullPath = rootPath;
         root.IsFolder = true;
         root.Icon = "📁";
         root.IsExpanded = autoExpand;
         if (string.IsNullOrEmpty(root.Name)) {
-            root.Name = rootPath;
+            root.Name = string.IsNullOrEmpty(normalizedRoot) ? rootPath : normalizedRoot;
         }
 
         var dirLookup = new Dictionary<string, FileNodeV2>(StringComparer.OrdinalIgnoreCase);
-        dirLookup[rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)] = root;
+        dirLookup[normalizedRoot] = root;
 
         foreach (var file in files) {
             string dirPath = Path.GetDirectoryName(file.FullPath);
@@ -180,13 +196,15 @@ public class FileNodeV2 : System.ComponentModel.INotifyPropertyChanged {
 
     private static FileNodeV2 GetOrCreateDirNode(string rootPath, string dirPath, FileNodeV2 root, Dictionary<string, FileNodeV2> lookup, bool autoExpand) {
         if (string.IsNullOrEmpty(dirPath)) return root;
-        string cleanDirPath = dirPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        string rootKey = NormalizeDirectoryKey(rootPath);
+        string cleanDirPath = NormalizeDirectoryKey(dirPath);
         FileNodeV2 existing;
         if (lookup.TryGetValue(cleanDirPath, out existing)) {
             return existing;
         }
 
-        if (cleanDirPath.Equals(rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)) {
+        if (string.Equals(cleanDirPath, rootKey, StringComparison.OrdinalIgnoreCase)) {
             return root;
         }
 
@@ -194,7 +212,10 @@ public class FileNodeV2 : System.ComponentModel.INotifyPropertyChanged {
         FileNodeV2 parentNode = GetOrCreateDirNode(rootPath, parentDir, root, lookup, autoExpand);
 
         var node = new FileNodeV2();
-        node.Name = Path.GetFileName(cleanDirPath);
+        node.Name = Path.GetFileName(cleanDirPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (string.IsNullOrEmpty(node.Name)) {
+            node.Name = cleanDirPath;
+        }
         node.FullPath = cleanDirPath;
         node.IsFolder = true;
         node.Icon = "📁";
@@ -894,6 +915,46 @@ public class FastSearchEngineV2 {
         return ContainsTokensOnSameLine(text, tokens, matchWholeWord, false, null);
     }
 
+    private static IEnumerable<string> EnumerateFilesRecursively(string rootPath, string extensionPattern, System.Threading.CancellationToken ct) {
+        var stack = new Stack<string>();
+        stack.Push(rootPath);
+
+        while (stack.Count > 0) {
+            if (ct.IsCancellationRequested) yield break;
+
+            string dir = stack.Pop();
+            if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir)) {
+                continue;
+            }
+
+            List<string> files = null;
+            try {
+                files = new List<string>(Directory.EnumerateFiles(dir, extensionPattern, SearchOption.TopDirectoryOnly));
+            } catch {
+                // Ignore inaccessible folders, but continue scanning the remaining directories.
+            }
+            if (files != null) {
+                foreach (var file in files) {
+                    if (ct.IsCancellationRequested) yield break;
+                    yield return file;
+                }
+            }
+
+            List<string> childDirs = null;
+            try {
+                childDirs = new List<string>(Directory.EnumerateDirectories(dir, "*", SearchOption.TopDirectoryOnly));
+            } catch {
+                // Ignore inaccessible folders, but continue scanning the remaining directories.
+            }
+            if (childDirs != null) {
+                foreach (var childDir in childDirs) {
+                    if (ct.IsCancellationRequested) yield break;
+                    stack.Push(childDir);
+                }
+            }
+        }
+    }
+
     public static List<SearchResultItemV2> Search(string rootPath, string[] tokens, string[] excludeTokens, bool filterByDate, DateTime minDate, string[] extensions, bool matchWholeWord, bool matchSameLine, bool skipFileName, bool skipFileContent, bool matchRegex, System.Threading.CancellationToken ct) {
         Interlocked.Exchange(ref ScannedCount, 0);
         Interlocked.Exchange(ref MatchedCount, 0);
@@ -938,7 +999,7 @@ public class FastSearchEngineV2 {
         foreach (var ext in normalizedExts) {
             if (ct.IsCancellationRequested) return new List<SearchResultItemV2>();
             try {
-                foreach (var f in Directory.EnumerateFiles(rootPath, ext, SearchOption.AllDirectories)) {
+                foreach (var f in EnumerateFilesRecursively(rootPath, ext, ct)) {
                     if (ct.IsCancellationRequested) return new List<SearchResultItemV2>();
                     fileSet.Add(f);
                 }
@@ -1239,13 +1300,17 @@ $script:ScriptDir = if ($PSScriptRoot) {
 } elseif ($MyInvocation.MyCommand -is [System.Management.Automation.ExternalScriptInfo] -and $MyInvocation.MyCommand.Path) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
 } else {
-    'D:\Skrypty\FastSearcher'
+    $env:SystemDrive + '\'
 }
-$script:ConfigFile = Join-Path $script:ScriptDir 'config.json'
+$script:ConfigDir = Join-Path $env:USERPROFILE 'FastSearcher'
+$script:ConfigFile = Join-Path $script:ConfigDir 'config.json'
+if (-not (Test-Path -LiteralPath $script:ConfigDir)) {
+    New-Item -ItemType Directory -Path $script:ConfigDir -Force | Out-Null
+}
 
 function Get-AppConfig {
     $cfg = [PSCustomObject]@{
-        SearchFolder            = 'D:\Skrypty'
+        SearchFolder            = 'C:\'
         FileExtensions          = @('*.ps1', '*.md')
         FilterModifiedSince     = $null
         FilterModifiedLast5Days = $false
@@ -1722,7 +1787,7 @@ function Get-UiString {
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <TextBlock Text="⚡ FastSearcher" FontSize="17" FontWeight="Bold" Foreground="{DynamicResource TextHighlight}"/>
                         <Border Background="{DynamicResource BgPanel}" CornerRadius="4" Padding="6,2" Margin="10,0,0,0">
-                            <TextBlock Name="lblHeaderSubtitle" Text="Ultra-Fast Script &amp; Markdown Search" FontSize="11" Foreground="{DynamicResource TextSecondary}"/>
+                            <TextBlock Name="lblHeaderSubtitle" Text="Fast Search Tool" FontSize="11" Foreground="{DynamicResource TextSecondary}"/>
                         </Border>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
@@ -2351,7 +2416,7 @@ function Set-UiLanguage {
     }
 
     $window.Title             = Get-UiString 'WindowTitle' 'FastSearcher — Fast Search Tool'
-    $lblHeaderSubtitle.Text    = Get-UiString 'HeaderSubtitle' 'Ultra-Fast Script & Markdown Search'
+    $lblHeaderSubtitle.Text    = Get-UiString 'HeaderSubtitle' 'Fast Search Tool'
     $lblLanguageLabel.Text     = Get-UiString 'LabelLanguage' 'Language:'
     $lblFolderLabel.Text       = Get-UiString 'LabelFolder' 'Folder:'
     $btnBrowse.Content         = Get-UiString 'BtnBrowse' '📁 Browse...'

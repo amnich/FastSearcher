@@ -118,7 +118,7 @@ Write-Host "Size : $sizeKb KB" -ForegroundColor Green
 # 5. Ensure language.json and config.json are available next to the output executable
 # (FastSearcher.ps1 resolves both files relative to its own folder at runtime)
 $OutputDir = Split-Path -Parent $item.FullName
-foreach ($extraFile in @('language.json', 'config.json')) {
+foreach ($extraFile in @('language.json')) {
     $sourceFile = Join-Path $ScriptDir $extraFile
     $destFile = Join-Path $OutputDir $extraFile
     if ((Test-Path $sourceFile) -and ($sourceFile -ne $destFile) -and -not (Test-Path $destFile)) {
