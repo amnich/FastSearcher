@@ -1,20 +1,21 @@
 ﻿{
     "SearchFolder":  "D:\\Skrypty",
     "FileExtensions":  [
-                           "*.*"
+                           "*.ps1",
+                           "*.md"
                        ],
     "FilterModifiedSince":  null,
     "FilterModifiedLast5Days":  false,
     "DaysModifiedFilter":  5,
     "SearchInSubfolders":  true,
-    "LastSearchQuery":  "Kohlschein",
+    "LastSearchQuery":  "Get-ADuser employeeID compare",
     "AutoExpandTree":  true,
     "FontSize":  13,
     "Theme":  "Dark",
     "Language":  "en",
     "MatchWholeWord":  false,
     "MatchSameLine":  false,
-    "SkipFileName":  true,
+    "SkipFileName":  false,
     "SkipFileContent":  false,
     "MatchRegex":  false,
     "SearchDebounceMs":  750

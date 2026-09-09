@@ -28,7 +28,7 @@ Powered by an in-memory compiled C# parallel search engine ([FastSearchEngineV2]
 
 ## Key Features
 
-### 1. Ultra-Fast Multi-Threaded C# Engine (`FastSearchEngineV2`)
+### 1. Fast Multi-Threaded C# Engine (`FastSearchEngineV2`)
 - **Multi-Core Parallelism**: Uses `Parallel.ForEach` across all available logical CPU cores (`Environment.ProcessorCount`) to inspect file contents concurrently.
 - **Sub-Second Latency**: Traverses and searches repositories of 6,000+ files in approximately **300–600 ms**.
 - **Digital Signature Stripping**: Automatically detects and excludes cryptographic signature blocks (`# SIG # Begin signature block`) from search evaluations. This prevents false positive hits on common short acronyms (e.g., `BC`, `AD`, `SQL`, `NAV`) caused by random Base64-encoded digital certificates.
@@ -180,7 +180,7 @@ The script compiles specialized C# classes using `Add-Type` at startup:
 
 ```
 +-------------------------------------------------------------------------------------------------------+
-| ⚡ FastSearcher  [Ultra-Fast Script & Markdown Search]             Ready (45 files / 312 ms)  [EN v] |
+| ⚡ FastSearcher  [Fast Search]                                    Ready (45 files / 312 ms)  [EN v] |
 +-------------------------------------------------------------------------------------------------------+
 | Folder:     [ D:\Skrypty                                     ] [📁 Browse...] [💾 Set Default] [📂 Open] |
 | Search:     [ BC "AD compare"  [x]] [ ] Whole [ ] Same line [ ] Skip name [ ] Skip cont [🔍 Search] [↺ Reset] |
