@@ -501,6 +501,6 @@ powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File ".\FastSearcher.ps1
 
 ## Author & Specifications
 
-- **Author**: Adam Mnich
+- **Author**: Adam Mnich with Github Copilot
 - **Encoding Standard**: UTF-8 with BOM (`0xEF, 0xBB, 0xBF`)
 - **Compatibility**: PowerShell 5.1 & PowerShell 7+ (Windows)
