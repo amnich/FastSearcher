@@ -1645,6 +1645,45 @@ function Get-UiString {
             <Setter Property="Foreground"  Value="{DynamicResource TextPrimary}"/>
         </Style>
 
+        <!-- ListBox and ListBoxItem (Path completion popup) -->
+        <Style TargetType="{x:Type ListBox}">
+            <Setter Property="Background"      Value="{DynamicResource BgPanel}"/>
+            <Setter Property="Foreground"      Value="{DynamicResource TextPrimary}"/>
+            <Setter Property="BorderBrush"     Value="{DynamicResource BrdrMain}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+        </Style>
+        <Style TargetType="{x:Type ListBoxItem}">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+            <Setter Property="Padding"    Value="6,4"/>
+            <Setter Property="Cursor"     Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ListBoxItem}">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentBlue}"/>
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource BtnSecondary}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- Expander ToggleButton Style (tree chevron) -->
         <Style x:Key="ExpandCollapseToggleStyle" TargetType="{x:Type ToggleButton}">
             <Setter Property="Focusable" Value="False"/>
@@ -1808,7 +1847,17 @@ function Get-UiString {
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock Name="lblFolderLabel" Grid.Column="0" Text="Folder:" Foreground="{DynamicResource TextSecondary}" FontSize="12.5" VerticalAlignment="Center" FontWeight="SemiBold"/>
-                    <TextBox Name="txtFolder" Grid.Column="1" Height="28" Margin="0,0,6,0" VerticalContentAlignment="Center"/>
+                    <Grid Grid.Column="1" Margin="0,0,6,0">
+                        <TextBox Name="txtFolder" Height="28" VerticalContentAlignment="Center"/>
+                        <Popup Name="popFolderSuggestions" PlacementTarget="{Binding ElementName=txtFolder}"
+                               Placement="Bottom" StaysOpen="False" AllowsTransparency="True">
+                            <Border MinWidth="{Binding ActualWidth, ElementName=txtFolder}" MaxHeight="180"
+                                    Background="{DynamicResource BgPanel}" BorderBrush="{DynamicResource BrdrMain}" BorderThickness="1"
+                                    CornerRadius="4" SnapsToDevicePixels="True">
+                                <ListBox Name="lstFolderSuggestions" MaxHeight="178" BorderThickness="0" Background="Transparent"/>
+                            </Border>
+                        </Popup>
+                    </Grid>
                     <Button Name="btnBrowse"      Grid.Column="2" Content="📁 Browse..."         Background="{DynamicResource BtnSecondary}" Foreground="{DynamicResource TextPrimary}" Height="28" Margin="0,0,4,0" Padding="10,4"/>
                     <Button Name="btnSaveDefault" Grid.Column="3" Content="💾 Save as Default"  Background="{DynamicResource BtnSecondary}" Foreground="{DynamicResource TextPrimary}" Height="28" Margin="0,0,4,0" Padding="10,4"/>
                     <Button Name="btnOpenFolder"  Grid.Column="4" Content="📂 Open"              Background="{DynamicResource BtnSecondary}" Foreground="{DynamicResource TextPrimary}" Height="28" Padding="10,4"/>
@@ -2050,11 +2099,13 @@ $reader = [System.Xml.XmlNodeReader]::new($xaml)
 $window = [System.Windows.Markup.XamlReader]::Load($reader)
 
 # Retrieve controls from the XAML tree
-$txtFolder           = $window.FindName("txtFolder")
-$btnBrowse           = $window.FindName("btnBrowse")
-$btnSaveDefault      = $window.FindName("btnSaveDefault")
-$btnOpenFolder       = $window.FindName("btnOpenFolder")
-$btnThemeToggle      = $window.FindName("btnThemeToggle")
+$txtFolder               = $window.FindName("txtFolder")
+$popFolderSuggestions    = $window.FindName("popFolderSuggestions")
+$lstFolderSuggestions    = $window.FindName("lstFolderSuggestions")
+$btnBrowse               = $window.FindName("btnBrowse")
+$btnSaveDefault          = $window.FindName("btnSaveDefault")
+$btnOpenFolder           = $window.FindName("btnOpenFolder")
+$btnThemeToggle          = $window.FindName("btnThemeToggle")
 
 $txtSearch           = $window.FindName("txtSearch")
 $btnClearSearch      = $window.FindName("btnClearSearch")
@@ -2385,6 +2436,59 @@ foreach ($code in $script:LanguagesCatalog.Keys) {
 }
 
 # ── 8. GUI helper and navigation functions ───────────────────────────────────
+
+function Get-DirectorySuggestions([string]$Path) {
+    try {
+        $typedPath = if ($Path) { $Path.Trim() } else { '' }
+        if ([string]::IsNullOrWhiteSpace($typedPath)) {
+            return @(Get-PSDrive -PSProvider FileSystem |
+                Where-Object { $_.Root } |
+                ForEach-Object { $_.Root } |
+                Sort-Object -Unique)
+        }
+
+        if ($typedPath -match '^[A-Za-z]:$') {
+            $typedPath += '\'
+        }
+
+        $hasTrailingSeparator = $typedPath.EndsWith('\') -or $typedPath.EndsWith('/')
+        $parentPath = if ($hasTrailingSeparator) { $typedPath } else { Split-Path -Path $typedPath -Parent }
+        $leafPrefix = if ($hasTrailingSeparator) { '' } else { Split-Path -Path $typedPath -Leaf }
+
+        if ([string]::IsNullOrWhiteSpace($parentPath)) {
+            $parentPath = (Get-Location).Path
+        }
+        if (-not (Test-Path -LiteralPath $parentPath -PathType Container)) {
+            return @()
+        }
+
+        return @(Get-ChildItem -LiteralPath $parentPath -Directory -ErrorAction Stop |
+            Where-Object { $_.Name.StartsWith($leafPrefix, [StringComparison]::OrdinalIgnoreCase) } |
+            Sort-Object Name |
+            Select-Object -First 20 |
+            ForEach-Object { $_.FullName })
+    }
+    catch {
+        return @()
+    }
+}
+
+function Update-PathSuggestions($TextBox, $Popup, $SuggestionList) {
+    if ($null -eq $TextBox -or $null -eq $Popup -or $null -eq $SuggestionList) { return }
+    $suggestions = @(Get-DirectorySuggestions $TextBox.Text)
+    $SuggestionList.ItemsSource = $suggestions
+    $Popup.IsOpen = $TextBox.IsKeyboardFocusWithin -and $suggestions.Count -gt 0
+}
+
+function Apply-PathSuggestion($TextBox, $Popup, $SuggestionList) {
+    $selection = [string]$SuggestionList.SelectedItem
+    if (-not [string]::IsNullOrWhiteSpace($selection)) {
+        $TextBox.Text = $selection
+        $TextBox.CaretIndex = $TextBox.Text.Length
+        $Popup.IsOpen = $false
+        $null = $TextBox.Focus()
+    }
+}
 
 function Get-FileCountLabel([int]$count) {
     $noun = if ($count -eq 1) {
@@ -3143,6 +3247,57 @@ $btnExtAll.Add_Click({
     }
     Update-ExtAllButtonState
     Invoke-ScriptSearch
+})
+
+# Folder auto-completion popup and keyboard navigation
+$txtFolder.Add_TextChanged({
+    if ($script:IsWindowLoaded) {
+        Update-PathSuggestions $txtFolder $popFolderSuggestions $lstFolderSuggestions
+    }
+})
+
+$txtFolder.Add_GotKeyboardFocus({
+    Update-PathSuggestions $txtFolder $popFolderSuggestions $lstFolderSuggestions
+})
+
+$txtFolder.Add_PreviewKeyDown({
+    param($s, $e)
+    if ($e.Key -eq [System.Windows.Input.Key]::Tab -and $popFolderSuggestions.IsOpen -and $lstFolderSuggestions.Items.Count -gt 0) {
+        $lstFolderSuggestions.SelectedIndex = 0
+        Apply-PathSuggestion $txtFolder $popFolderSuggestions $lstFolderSuggestions
+        $e.Handled = $true
+    } elseif ($e.Key -eq [System.Windows.Input.Key]::Down -and $popFolderSuggestions.IsOpen -and $lstFolderSuggestions.Items.Count -gt 0) {
+        $lstFolderSuggestions.SelectedIndex = 0
+        $null = $lstFolderSuggestions.Focus()
+        $e.Handled = $true
+    } elseif ($e.Key -eq [System.Windows.Input.Key]::Escape -and $popFolderSuggestions.IsOpen) {
+        $popFolderSuggestions.IsOpen = $false
+        $e.Handled = $true
+    } elseif ($e.Key -eq [System.Windows.Input.Key]::Enter) {
+        $popFolderSuggestions.IsOpen = $false
+        $folder = $txtFolder.Text.Trim()
+        if (Test-Path -LiteralPath $folder) {
+            $script:CurrentFolder = $folder
+            $lblStatusRight.Text = "$folder | UTF-8 with BOM"
+            Invoke-ScriptSearch
+        }
+    }
+})
+
+$lstFolderSuggestions.Add_SelectionChanged({
+    Apply-PathSuggestion $txtFolder $popFolderSuggestions $lstFolderSuggestions
+})
+
+$lstFolderSuggestions.Add_KeyDown({
+    param($s, $e)
+    if ($e.Key -eq [System.Windows.Input.Key]::Enter) {
+        Apply-PathSuggestion $txtFolder $popFolderSuggestions $lstFolderSuggestions
+        $e.Handled = $true
+    } elseif ($e.Key -eq [System.Windows.Input.Key]::Escape) {
+        $popFolderSuggestions.IsOpen = $false
+        $null = $txtFolder.Focus()
+        $e.Handled = $true
+    }
 })
 
 # Folder selection
