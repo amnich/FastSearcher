@@ -62,16 +62,23 @@ Aplikacja wykorzystuje wielowątkowy silnik w języku C# (`Parallel.ForEach`), c
    - Podświetlenie zaznaczenia pozostaje widoczne nawet po utracie fokusu przez pole tekstowe (`IsInactiveSelectionHighlightEnabled`).
    - Pasek metadanych (rozmiar, łączna liczba linii, data modyfikacji, pełna ścieżka).
    - Przycisk szybkiego kopiowania ścieżki i całego kodu do schowka.
-8. **Nawigator dopasowań (Match Navigator)**:
+8. **Wizualny podgląd dokumentów Word (DOCX), Excel (XLSX, CSV) i PDF (`FastOfficeVisualizer`, v1.4)**:
+   - Domyślnie aplikacja ładuje natychmiastowy (<2ms) podgląd czystego tekstu z nawigatorem trafień.
+   - Po zaznaczeniu pliku Word (`.docx`), arkusza (`.xlsx`, `.csv`) lub PDF (`.pdf`) w nagłówku podglądu pojawia się przełącznik widoków: `[ 📄 Text ] [ 👁️ Visual ]`.
+   - **Widok wizualny DOCX**: renderuje sformatowane nagłówki, akapity, tabele z obramowaniem, formatowanie znakowe (pogrubienie, kursywa, podkreślenie, przekreślenie), listy punktowane oraz osadzone obrazy z wyróżnieniem szukanych fraz.
+   - **Widok wizualny Excel / CSV**: renderuje interaktywny widok arkuszy kalkulacyjnych z zakładkami do przełączania arkuszy (`Sheet1`, `Sheet2`...), lepkimi nagłówkami wierszy i kolumn (A, B, C... / 1, 2, 3...) oraz podświetleniem komórek zawierających szukane frazy.
+   - **Widok wizualny PDF**: osadza responsywny podgląd PDF z czytelnym trybem czytnika, wyróżnieniem fraz i przyciskiem szybkiego otwarcia w systemowej przeglądarce PDF.
+   - **Opcja `[✓] Auto Visual`**: checkbox obok metadanych pliku pozwalający na trwałe włączenie automatycznego otwierania plików Office/PDF w trybie wizualnym (zapisywane w `config.json` jako `RichOfficePreviewDefault`).
+9. **Nawigator dopasowań (Match Navigator)**:
    - Gdy plik zawiera wyszukiwane frazy, pojawia się pasek trafień z przyciskami `▲ Poprzednie` i `▼ Następne`.
    - Kliknięcie powoduje bezpośrednie przewinięcie edytora do linii z trafieniem i zaznaczenie szukanej frazy (z uwzględnieniem opcji całych słów).
-9. **Akcje i integracja z narzędziami**:
-   - Uruchomienie skryptu / otwarcie pliku w programie domyślnym.
-   - Bezpośrednie otwarcie w **Visual Studio Code** (`code -g <plik>`).
-   - Otwarcie folderu i zaznaczenie pliku w Eksploratorze Windows (`explorer.exe /select`).
-10. **Trwałość konfiguracji (`config.json`)**:
-    - Automatyczny odczyt i zapis domyślnego katalogu wyszukiwania, preferencji rozszerzeń, filtrów oraz opcji całych słów.
-11. **Dwustopniowy pomiar czasu (Dual Stopwatch)**:
+10. **Akcje i integracja z narzędziami**:
+    - Uruchomienie skryptu / otwarcie pliku w programie domyślnym.
+    - Bezpośrednie otwarcie w **Visual Studio Code** (`code -g <plik>`).
+    - Otwarcie folderu i zaznaczenie pliku w Eksploratorze Windows (`explorer.exe /select`).
+11. **Trwałość konfiguracji (`config.json`)**:
+    - Automatyczny odczyt i zapis domyślnego katalogu wyszukiwania, preferencji rozszerzeń, filtrów, opcji całych słów oraz domyślnego trybu podglądu dokumentów Office.
+12. **Dwustopniowy pomiar czasu (Dual Stopwatch)**:
     - **`swSearch`** mierzy wyłącznie czas równoległego skanowania C# (`Parallel.ForEach`). Wynik pojawia się w górnym polu statusu: `Found: N (X ms)`.
     - **`swTotal`** mierzy całkowity czas od zakończenia skanowania do momentu przypisania `ItemsSource` drzewu WPF (tj. `BuildTree` + bindowanie WPF). Wynik pojawia się na dolnym pasku stanu: `| Total: X ms`.
     - Różnica między obiema wartościami pozwala precyzyjnie zmierzyć, ile czasu zajmuje samo budowanie i renderowanie drzewa.
@@ -103,7 +110,8 @@ Plik konfiguracyjny znajduje się w folderze aplikacji: `D:\Skrypty\Mnich_Adam_S
   "MatchRegex": false,
   "SkipFileName": false,
   "SkipFileContent": false,
-  "SearchDebounceMs": 750
+  "SearchDebounceMs": 750,
+  "RichOfficePreviewDefault": false
 }
 ```
 
@@ -135,6 +143,9 @@ Plik konfiguracyjny znajduje się w folderze aplikacji: `D:\Skrypty\Mnich_Adam_S
 | **Results Tree** | `treeResults` | Hierarchiczne drzewo znalezionych plików i folderów (z wirtualizacją WPF) |
 | **Expand / Collapse**| `btnExpandAll`, `btnCollapseAll` | Globalne sterowanie rozwinięciem węzłów |
 | **Preview Box** | `txtPreview` | Ciemny edytor podglądu z `ScrollToLine` i trwałym zaznaczeniem |
+| **Visual Preview** | `wbVisualPreview` | Kontener podglądu HTML WebBrowser dla sformatowanych dokumentów Office i PDF |
+| **View Mode Toggle** | `btnViewText`, `btnViewVisual` | Przełącznik widoku: szybki tekst (`📄 Text`) vs bogaty widok wizualny (`👁️ Visual`) |
+| **Auto Visual Option** | `chkAutoVisualPreview` | Checkbox automatycznego otwierania dokumentów Office/PDF w trybie wizualnym |
 | **Match Nav** | `btnPrevMatch`, `btnNextMatch` | Przechodzenie do poprzedniego/następnego trafienia (skróty: `Shift+F3` / `F3`) |
 | **Status Bar** | `lblStatus`, `lblStatusRight` | Liczba trafień, liczniki live (`X przeskanowanych`), czas skanowania C# oraz całkowity czas GUI |
 | **Top Stats Badge** | `lblTopStats` | Skrócony wynik w nagłówku: `Found: N (X ms)` — czas samego skanowania C# |
