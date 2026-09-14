@@ -7,7 +7,7 @@
 [![Encoding](https://img.shields.io/badge/Encoding-UTF--8%20with%20BOM-orange.svg)](https://en.wikipedia.org/wiki/Byte_order_mark)
 [![i18n](https://img.shields.io/badge/i18n-EN%20%7C%20DE%20%7C%20PL-teal.svg)](language.json)
 
-**FastSearcher** is an advanced, multi-threaded desktop search application built with PowerShell and WPF with dynamic **Slate Dark** and **Clean Light** themes. It is designed to scan thousands of scripts, configuration files, Markdown documents, Office documents (Excel, Word, PowerPoint, OpenDocument, legacy XLS/DOC), and searchable PDF files across directory structures (such as `D:\Skrypty`) in **300–600 milliseconds**.
+**FastSearcher** is an multi-threaded desktop search application built with PowerShell and WPF with dynamic **Slate Dark** and **Clean Light** themes. It is designed to scan thousands of scripts, configuration files, Markdown documents, Office documents (Excel, Word, PowerPoint, OpenDocument, legacy XLS/DOC), and searchable PDF files across directory structures (such as `D:\Skrypty`) in **300–600 milliseconds**.
 
 Powered by an in-memory compiled C# parallel search engine ([FastSearchEngineV2](FastSearcher.ps1)), **FastSearcher** delivers instant `ALL` (AND) multi-phrase matching, digital signature filtering, zero-dependency Office & PDF text extraction, hierarchical tree visualization with hardware-accelerated UI virtualization, double-click folder expansion, in-app syntax previewing with match jumping, dynamic extension & date presets, dual execution timing metrics, and full multi-language UI localization (English, German, and Polish).
 
