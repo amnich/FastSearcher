@@ -68,6 +68,17 @@ public class DwmWindowDarkHelper {
 "@ -ErrorAction SilentlyContinue
 }
 
+# Configure WebBrowser IE11/Edge feature emulation for FastSearcher, PowerShell, and pwsh
+try {
+    $regEmulationKey = 'HKCU:\Software\Microsoft\Internet Explorer\Main\FeatureControl\FEATURE_BROWSER_EMULATION'
+    if (-not (Test-Path -LiteralPath $regEmulationKey)) {
+        New-Item -Path $regEmulationKey -Force | Out-Null
+    }
+    @('powershell.exe', 'pwsh.exe', 'FastSearcher.exe') | ForEach-Object {
+        Set-ItemProperty -LiteralPath $regEmulationKey -Name $_ -Value 11001 -Type DWord -Force -ErrorAction SilentlyContinue
+    }
+} catch {}
+
 # ── 3. Compile the C# search engine (FastSearchEngineV2, FileNodeV2, MatchLocationV2)
 if (-not ([System.Management.Automation.PSTypeName]'FastSearchEngineV2').Type) {
     $csharpEngine = @"
@@ -80,6 +91,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Xml;
 
 public class ParsedQueryV2 {
     public string[] IncludeTokens { get; set; }
@@ -1284,6 +1296,866 @@ public class FastSearchEngineV2 {
         return FindMatches(content, tokens, false, false, false);
     }
 }
+
+public static class FastOfficeVisualizer {
+
+    public static string EscapeHtml(string text) {
+        if (string.IsNullOrEmpty(text)) return "";
+        return System.Security.SecurityElement.Escape(text);
+    }
+
+    public static string HighlightHtml(string text, string[] tokens, bool isDark) {
+        if (string.IsNullOrEmpty(text)) return "";
+        string escaped = EscapeHtml(text);
+        if (tokens == null || tokens.Length == 0) return escaped;
+
+        string hlBg = isDark ? "#ca8a04" : "#fde047";
+        string hlFg = isDark ? "#ffffff" : "#1e293b";
+
+        foreach (string t in tokens) {
+            if (string.IsNullOrWhiteSpace(t)) continue;
+            string raw = t.Trim();
+            if (raw.Length == 0) continue;
+            string pattern = Regex.Escape(EscapeHtml(raw));
+            try {
+                escaped = Regex.Replace(escaped, pattern, 
+                    "<mark style=\"background:" + hlBg + ";color:" + hlFg + ";padding:1px 4px;border-radius:2px;font-weight:bold;\">$&</mark>", 
+                    RegexOptions.IgnoreCase);
+            } catch {}
+        }
+        return escaped;
+    }
+
+    private static string GetBaseCss(bool isDark) {
+        string bg = isDark ? "#1e1e1e" : "#f8fafc";
+        string cardBg = isDark ? "#252526" : "#ffffff";
+        string fg = isDark ? "#d4d4d4" : "#1e293b";
+        string fgMuted = isDark ? "#858585" : "#64748b";
+        string border = isDark ? "#383838" : "#e2e8f0";
+        string accent = isDark ? "#38bdf8" : "#0284c7";
+        string tableHdrBg = isDark ? "#2d2d30" : "#f1f5f9";
+        string rowAltBg = isDark ? "#222224" : "#f8fafc";
+        string activeTabBg = isDark ? "#0284c7" : "#0284c7";
+
+        return @"
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    font-size: 13.5px;
+    line-height: 1.6;
+    background-color: " + bg + @";
+    color: " + fg + @";
+    padding: 16px;
+}
+.doc-card {
+    background-color: " + cardBg + @";
+    border: 1px solid " + border + @";
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 28px 36px;
+}
+.doc-header {
+    border-bottom: 1px solid " + border + @";
+    padding-bottom: 14px;
+    margin-bottom: 22px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.doc-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: " + accent + @";
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.doc-meta {
+    font-size: 11.5px;
+    color: " + fgMuted + @";
+    margin-top: 4px;
+}
+.doc-body h1 { font-size: 20px; font-weight: 700; margin: 20px 0 10px; color: " + accent + @"; border-bottom: 1px solid " + border + @"; padding-bottom: 6px; }
+.doc-body h2 { font-size: 16px; font-weight: 600; margin: 16px 0 8px; color: " + accent + @"; }
+.doc-body h3 { font-size: 14px; font-weight: 600; margin: 12px 0 6px; }
+.doc-body p { margin-bottom: 10px; }
+.doc-body ul, .doc-body ol { margin-left: 24px; margin-bottom: 12px; }
+.doc-body li { margin-bottom: 4px; }
+.doc-table-wrap {
+    overflow-x: auto;
+    margin: 16px 0;
+    border: 1px solid " + border + @";
+    border-radius: 6px;
+}
+table.doc-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+}
+table.doc-table th, table.doc-table td {
+    border: 1px solid " + border + @";
+    padding: 6px 10px;
+    text-align: left;
+    vertical-align: top;
+}
+table.doc-table th {
+    background-color: " + tableHdrBg + @";
+    font-weight: 600;
+}
+table.doc-table tr:nth-child(even) td {
+    background-color: " + rowAltBg + @";
+}
+/* Spreadsheet specific styles */
+.sheet-container {
+    max-width: 100%;
+    margin: 0 auto;
+    background: " + cardBg + @";
+    border: 1px solid " + border + @";
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    overflow: hidden;
+}
+.sheet-toolbar {
+    background-color: " + tableHdrBg + @";
+    border-bottom: 1px solid " + border + @";
+    padding: 8px 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.sheet-tabs {
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    padding: 2px 0;
+}
+.sheet-tab-btn {
+    background: transparent;
+    border: 1px solid " + border + @";
+    border-radius: 4px;
+    padding: 5px 12px;
+    font-size: 12px;
+    color: " + fg + @";
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.15s ease;
+}
+.sheet-tab-btn:hover {
+    background-color: " + border + @";
+}
+.sheet-tab-btn.active {
+    background-color: " + activeTabBg + @";
+    color: #ffffff;
+    border-color: " + activeTabBg + @";
+    font-weight: 600;
+}
+.sheet-table-scroll {
+    overflow: auto;
+    max-height: calc(100vh - 120px);
+    position: relative;
+}
+table.sheet-table {
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 12px;
+    width: 100%;
+    font-family: 'Segoe UI', Consolas, monospace;
+}
+table.sheet-table th.col-hdr {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background-color: " + tableHdrBg + @";
+    border-bottom: 2px solid " + border + @";
+    border-right: 1px solid " + border + @";
+    padding: 6px 12px;
+    font-weight: 600;
+    text-align: center;
+    color: " + fgMuted + @";
+    user-select: none;
+}
+table.sheet-table th.row-hdr {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background-color: " + tableHdrBg + @";
+    border-right: 2px solid " + border + @";
+    border-bottom: 1px solid " + border + @";
+    padding: 4px 10px;
+    font-weight: 600;
+    text-align: right;
+    color: " + fgMuted + @";
+    width: 45px;
+    user-select: none;
+}
+table.sheet-table th.corner-hdr {
+    position: sticky;
+    top: 0;
+    left: 0;
+    z-index: 3;
+    background-color: " + tableHdrBg + @";
+    border-bottom: 2px solid " + border + @";
+    border-right: 2px solid " + border + @";
+    width: 45px;
+}
+table.sheet-table td {
+    border-right: 1px solid " + border + @";
+    border-bottom: 1px solid " + border + @";
+    padding: 4px 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 320px;
+}
+table.sheet-table tr:nth-child(even) td {
+    background-color: " + rowAltBg + @";
+}
+.sheet-notice {
+    padding: 8px 16px;
+    background-color: " + tableHdrBg + @";
+    border-top: 1px solid " + border + @";
+    font-size: 11.5px;
+    color: " + fgMuted + @";
+    display: flex;
+    justify-content: space-between;
+}
+.pdf-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+.pdf-toolbar {
+    background-color: " + tableHdrBg + @";
+    border-bottom: 1px solid " + border + @";
+    padding: 8px 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.pdf-btn {
+    background: " + activeTabBg + @";
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 5px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.pdf-reader-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+}
+.pdf-page-card {
+    background-color: " + cardBg + @";
+    border: 1px solid " + border + @";
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    max-width: 860px;
+    margin: 0 auto 16px;
+    padding: 24px 30px;
+    white-space: pre-wrap;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    line-height: 1.6;
+}
+";
+    }
+
+    /// <summary>Renders a Word (.docx) document into a visually appealing HTML document.</summary>
+    public static string RenderDocxToHtml(string filePath, bool isDark, string[] highlightTerms) {
+        if (!File.Exists(filePath)) return "<div style='color:red;'>File not found.</div>";
+
+        try {
+            using (var stream = File.OpenRead(filePath))
+            using (var zip = new ZipArchive(stream, ZipArchiveMode.Read)) {
+                var docEntry = zip.GetEntry("word/document.xml");
+                if (docEntry == null) return "<div style='padding:20px;'>Not a valid Word document (missing word/document.xml).</div>";
+
+                var images = new Dictionary<string, string>();
+                var relsEntry = zip.GetEntry("word/_rels/document.xml.rels");
+                if (relsEntry != null) {
+                    try {
+                        using (var rs = relsEntry.Open()) {
+                            var xdoc = new XmlDocument();
+                            xdoc.Load(rs);
+                            foreach (XmlNode rel in xdoc.GetElementsByTagName("Relationship")) {
+                                string id = rel.Attributes["Id"] != null ? rel.Attributes["Id"].Value : "";
+                                string target = rel.Attributes["Target"] != null ? rel.Attributes["Target"].Value : "";
+                                string type = rel.Attributes["Type"] != null ? rel.Attributes["Type"].Value : "";
+                                if (type.EndsWith("/image", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(target)) {
+                                    string fullTarget = target.StartsWith("media/") ? "word/" + target : target;
+                                    var imgEntry = zip.GetEntry(fullTarget);
+                                    if (imgEntry != null && imgEntry.Length < 4 * 1024 * 1024) {
+                                        using (var imgStream = imgEntry.Open())
+                                        using (var ms = new MemoryStream()) {
+                                            imgStream.CopyTo(ms);
+                                            string ext = Path.GetExtension(target).TrimStart('.').ToLowerInvariant();
+                                            string mime = ext == "png" ? "image/png" : (ext == "jpg" || ext == "jpeg" ? "image/jpeg" : "image/png");
+                                            images[id] = "data:" + mime + ";base64," + Convert.ToBase64String(ms.ToArray());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } catch {}
+                }
+
+                var sbBody = new StringBuilder();
+                int paragraphCount = 0;
+                int wordCount = 0;
+
+                using (var ds = docEntry.Open()) {
+                    var xdoc = new XmlDocument();
+                    xdoc.Load(ds);
+
+                    var nsmgr = new XmlNamespaceManager(xdoc.NameTable);
+                    nsmgr.AddNamespace("w", "http://schemas.openxmlformats.org/wordprocessingml/2006/main");
+                    nsmgr.AddNamespace("a", "http://schemas.openxmlformats.org/drawingml/2006/main");
+                    nsmgr.AddNamespace("r", "http://schemas.openxmlformats.org/officeDocument/2006/relationships");
+
+                    XmlNode bodyNode = xdoc.SelectSingleNode("//w:body", nsmgr);
+                    if (bodyNode != null) {
+                        foreach (XmlNode child in bodyNode.ChildNodes) {
+                            if (child.LocalName == "p") {
+                                string pStyle = "";
+                                XmlNode styleNode = child.SelectSingleNode("w:pPr/w:pStyle/@w:val", nsmgr);
+                                if (styleNode != null) pStyle = styleNode.Value;
+
+                                var pTextSb = new StringBuilder();
+                                foreach (XmlNode run in child.SelectNodes(".//w:r | .//w:drawing", nsmgr)) {
+                                    if (run.LocalName == "drawing") {
+                                        XmlNode blip = run.SelectSingleNode(".//a:blip/@r:embed", nsmgr);
+                                        if (blip != null && images.ContainsKey(blip.Value)) {
+                                            pTextSb.Append("<div style='text-align:center;margin:12px 0;'><img src='").Append(images[blip.Value]).Append("' style='max-width:100%;max-height:450px;border-radius:4px;'/></div>");
+                                        }
+                                        continue;
+                                    }
+
+                                    XmlNode tNode = run.SelectSingleNode("w:t", nsmgr);
+                                    if (tNode != null && !string.IsNullOrEmpty(tNode.InnerText)) {
+                                        string runText = tNode.InnerText;
+                                        wordCount += runText.Split(new char[]{' ', '\t', '\r', '\n'}, StringSplitOptions.RemoveEmptyEntries).Length;
+
+                                        bool isBold = run.SelectSingleNode("w:rPr/w:b", nsmgr) != null;
+                                        bool isItalic = run.SelectSingleNode("w:rPr/w:i", nsmgr) != null;
+                                        bool isUnderline = run.SelectSingleNode("w:rPr/w:u", nsmgr) != null;
+                                        bool isStrike = run.SelectSingleNode("w:rPr/w:strike", nsmgr) != null;
+
+                                        string hText = HighlightHtml(runText, highlightTerms, isDark);
+                                        if (isBold) hText = "<strong>" + hText + "</strong>";
+                                        if (isItalic) hText = "<em>" + hText + "</em>";
+                                        if (isUnderline) hText = "<u>" + hText + "</u>";
+                                        if (isStrike) hText = "<s>" + hText + "</s>";
+                                        pTextSb.Append(hText);
+                                    }
+                                }
+
+                                string inner = pTextSb.ToString();
+                                if (!string.IsNullOrWhiteSpace(inner)) {
+                                    paragraphCount++;
+                                    if (pStyle.IndexOf("Heading1", StringComparison.OrdinalIgnoreCase) >= 0 || pStyle.IndexOf("Title", StringComparison.OrdinalIgnoreCase) >= 0) {
+                                        sbBody.Append("<h1>").Append(inner).Append("</h1>\n");
+                                    } else if (pStyle.IndexOf("Heading2", StringComparison.OrdinalIgnoreCase) >= 0) {
+                                        sbBody.Append("<h2>").Append(inner).Append("</h2>\n");
+                                    } else if (pStyle.IndexOf("Heading3", StringComparison.OrdinalIgnoreCase) >= 0) {
+                                        sbBody.Append("<h3>").Append(inner).Append("</h3>\n");
+                                    } else {
+                                        sbBody.Append("<p>").Append(inner).Append("</p>\n");
+                                    }
+                                }
+                            } else if (child.LocalName == "tbl") {
+                                sbBody.Append("<div class='doc-table-wrap'><table class='doc-table'>\n");
+                                foreach (XmlNode tr in child.SelectNodes("w:tr", nsmgr)) {
+                                    sbBody.Append("<tr>");
+                                    foreach (XmlNode tc in tr.SelectNodes("w:tc", nsmgr)) {
+                                        string colspanAttr = "";
+                                        XmlNode gridSpan = tc.SelectSingleNode("w:tcPr/w:gridSpan/@w:val", nsmgr);
+                                        if (gridSpan != null) colspanAttr = " colspan='" + gridSpan.Value + "'";
+
+                                        var tcText = new StringBuilder();
+                                        foreach (XmlNode tp in tc.SelectNodes(".//w:p", nsmgr)) {
+                                            string pText = tp.InnerText;
+                                            if (!string.IsNullOrEmpty(pText)) {
+                                                wordCount += pText.Split(new char[]{' ', '\t', '\r', '\n'}, StringSplitOptions.RemoveEmptyEntries).Length;
+                                                if (tcText.Length > 0) tcText.Append("<br/>");
+                                                tcText.Append(HighlightHtml(pText, highlightTerms, isDark));
+                                            }
+                                        }
+                                        sbBody.Append("<td").Append(colspanAttr).Append(">").Append(tcText).Append("</td>");
+                                    }
+                                    sbBody.Append("</tr>\n");
+                                }
+                                sbBody.Append("</table></div>\n");
+                            }
+                        }
+                    }
+                }
+
+                string fiName = EscapeHtml(Path.GetFileName(filePath));
+                var fi = new FileInfo(filePath);
+                string fiSize = (fi.Length / 1024.0).ToString("N1") + " KB";
+
+                var html = new StringBuilder();
+                html.Append("<!DOCTYPE html><html><head><meta charset='utf-8'/><meta http-equiv='X-UA-Compatible' content='IE=edge'/>");
+                html.Append("<style>").Append(GetBaseCss(isDark)).Append("</style></head><body>");
+                html.Append("<div class='doc-card'>");
+                html.Append("<div class='doc-header'>");
+                html.Append("<div><div class='doc-title'><span>📃</span> ").Append(fiName).Append("</div>");
+                html.Append("<div class='doc-meta'>").Append(fiSize).Append(" • ").Append(paragraphCount).Append(" paragraphs • ~").Append(wordCount).Append(" words</div></div>");
+                html.Append("</div>");
+                html.Append("<div class='doc-body'>");
+                html.Append(sbBody);
+                html.Append("</div></div></body></html>");
+
+                return html.ToString();
+            }
+        } catch (Exception ex) {
+            return "<div style='color:red;padding:20px;'>Failed to render Word document: " + EscapeHtml(ex.Message) + "</div>";
+        }
+    }
+
+    /// <summary>Renders an Excel (.xlsx) workbook into an interactive tabbed HTML spreadsheet.</summary>
+    public static string RenderExcelToHtml(string filePath, bool isDark, string[] highlightTerms) {
+        if (!File.Exists(filePath)) return "<div style='color:red;'>File not found.</div>";
+
+        try {
+            using (var stream = File.OpenRead(filePath))
+            using (var zip = new ZipArchive(stream, ZipArchiveMode.Read)) {
+                // 1. Shared Strings
+                var sharedStrings = new List<string>();
+                var sstEntry = zip.GetEntry("xl/sharedStrings.xml");
+                if (sstEntry != null) {
+                    using (var ss = sstEntry.Open()) {
+                        var xdoc = new XmlDocument();
+                        xdoc.Load(ss);
+                        foreach (XmlNode si in xdoc.GetElementsByTagName("si")) {
+                            var sbSi = new StringBuilder();
+                            foreach (XmlNode node in si.SelectNodes(".//*[local-name()='t']")) {
+                                sbSi.Append(node.InnerText);
+                            }
+                            sharedStrings.Add(sbSi.ToString());
+                        }
+                    }
+                }
+
+                // 2. Workbook sheet names and rels
+                var sheetNames = new List<string>();
+                var sheetTargets = new List<string>();
+
+                var wbEntry = zip.GetEntry("xl/workbook.xml");
+                var relsEntry = zip.GetEntry("xl/_rels/workbook.xml.rels");
+                var relMap = new Dictionary<string, string>();
+
+                if (relsEntry != null) {
+                    using (var rs = relsEntry.Open()) {
+                        var xrels = new XmlDocument();
+                        xrels.Load(rs);
+                        foreach (XmlNode rel in xrels.GetElementsByTagName("Relationship")) {
+                            string id = rel.Attributes["Id"] != null ? rel.Attributes["Id"].Value : "";
+                            string target = rel.Attributes["Target"] != null ? rel.Attributes["Target"].Value : "";
+                            if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(target)) {
+                                if (!target.StartsWith("xl/")) target = "xl/" + target.TrimStart('/');
+                                relMap[id] = target;
+                            }
+                        }
+                    }
+                }
+
+                if (wbEntry != null) {
+                    using (var ws = wbEntry.Open()) {
+                        var xwb = new XmlDocument();
+                        xwb.Load(ws);
+                        foreach (XmlNode sh in xwb.GetElementsByTagName("sheet")) {
+                            string name = sh.Attributes["name"] != null ? sh.Attributes["name"].Value : "Sheet";
+                            string rId = sh.Attributes["r:id"] != null ? sh.Attributes["r:id"].Value : "";
+                            sheetNames.Add(name);
+                            if (relMap.ContainsKey(rId)) {
+                                sheetTargets.Add(relMap[rId]);
+                            } else {
+                                sheetTargets.Add("xl/worksheets/sheet" + sheetNames.Count + ".xml");
+                            }
+                        }
+                    }
+                }
+
+                if (sheetNames.Count == 0) {
+                    sheetNames.Add("Sheet1");
+                    sheetTargets.Add("xl/worksheets/sheet1.xml");
+                }
+
+                var sbTabs = new StringBuilder();
+                var sbSheets = new StringBuilder();
+
+                for (int s = 0; s < sheetNames.Count; s++) {
+                    string sName = sheetNames[s];
+                    string sTarget = sheetTargets[s];
+                    var sEntry = zip.GetEntry(sTarget);
+
+                    sbTabs.Append("<button class='sheet-tab-btn").Append(s == 0 ? " active" : "")
+                          .Append("' onclick='switchSheet(").Append(s).Append(")'>")
+                          .Append("📊 ").Append(EscapeHtml(sName)).Append("</button>");
+
+                    sbSheets.Append("<div class='sheet-content' id='sheet_").Append(s).Append("' style='display:")
+                            .Append(s == 0 ? "block" : "none").Append(";'>");
+
+                    if (sEntry == null) {
+                        sbSheets.Append("<div style='padding:20px;color:#888;'>Sheet data not found.</div></div>");
+                        continue;
+                    }
+
+                    // Parse sheet rows
+                    var rows = new List<Dictionary<int, string>>();
+                    int maxCol = 0;
+                    int rowLimit = 500;
+                    bool isTruncated = false;
+
+                    using (var sheetStream = sEntry.Open())
+                    using (var reader = XmlReader.Create(sheetStream)) {
+                        Dictionary<int, string> currentRow = null;
+                        int currentColIdx = 0;
+                        string cellType = "";
+
+                        while (reader.Read()) {
+                            if (reader.NodeType == XmlNodeType.Element) {
+                                if (reader.Name == "row") {
+                                    if (rows.Count >= rowLimit) {
+                                        isTruncated = true;
+                                        break;
+                                    }
+                                    currentRow = new Dictionary<int, string>();
+                                    rows.Add(currentRow);
+                                    currentColIdx = 0;
+                                } else if (reader.Name == "c" && currentRow != null) {
+                                    string cellRef = reader.GetAttribute("r");
+                                    cellType = reader.GetAttribute("t") ?? "";
+                                    currentColIdx = CellRefToColIndex(cellRef, currentColIdx);
+                                    if (currentColIdx > maxCol) maxCol = currentColIdx;
+                                } else if (reader.Name == "v" && currentRow != null) {
+                                    string val = reader.ReadElementContentAsString();
+                                    string text = val;
+                                    if (cellType == "s") {
+                                        int sstIdx;
+                                        if (int.TryParse(val, out sstIdx) && sstIdx >= 0 && sstIdx < sharedStrings.Count) {
+                                            text = sharedStrings[sstIdx];
+                                        }
+                                    } else if (cellType == "b") {
+                                        text = (val == "1") ? "TRUE" : "FALSE";
+                                    }
+                                    currentRow[currentColIdx] = text;
+                                } else if (reader.Name == "t" && cellType == "inlineStr" && currentRow != null) {
+                                    string text = reader.ReadElementContentAsString();
+                                    currentRow[currentColIdx] = text;
+                                }
+                            }
+                        }
+                    }
+
+                    // Build sheet table HTML
+                    sbSheets.Append("<div class='sheet-table-scroll'><table class='sheet-table'>");
+                    sbSheets.Append("<thead><tr><th class='corner-hdr'>#</th>");
+                    for (int c = 0; c <= maxCol; c++) {
+                        sbSheets.Append("<th class='col-hdr'>").Append(ColIndexToName(c)).Append("</th>");
+                    }
+                    sbSheets.Append("</tr></thead><tbody>");
+
+                    for (int r = 0; r < rows.Count; r++) {
+                        var rDict = rows[r];
+                        sbSheets.Append("<tr><th class='row-hdr'>").Append(r + 1).Append("</th>");
+                        for (int c = 0; c <= maxCol; c++) {
+                            string cellVal = rDict.ContainsKey(c) ? rDict[c] : "";
+                            string hVal = HighlightHtml(cellVal, highlightTerms, isDark);
+
+                            double dummyNum;
+                            bool isNum = double.TryParse(cellVal, out dummyNum);
+                            string alignStyle = isNum ? " style='text-align:right;'" : "";
+                            sbSheets.Append("<td").Append(alignStyle).Append(">").Append(hVal).Append("</td>");
+                        }
+                        sbSheets.Append("</tr>");
+                    }
+                    sbSheets.Append("</tbody></table></div>");
+
+                    sbSheets.Append("<div class='sheet-notice'>");
+                    sbSheets.Append("<span>Rows: ").Append(rows.Count).Append(isTruncated ? " (showing first 500)" : "").Append(" • Columns: ").Append(maxCol + 1).Append("</span>");
+                    if (isTruncated) {
+                        sbSheets.Append("<span style='color:#ca8a04;'>⚠️ Sheet contains more rows. Open in Excel for full data.</span>");
+                    }
+                    sbSheets.Append("</div></div>");
+                }
+
+                var fi = new FileInfo(filePath);
+                string fiSize = (fi.Length / 1024.0).ToString("N1") + " KB";
+
+                var html = new StringBuilder();
+                html.Append("<!DOCTYPE html><html><head><meta charset='utf-8'/><meta http-equiv='X-UA-Compatible' content='IE=edge'/>");
+                html.Append("<style>").Append(GetBaseCss(isDark)).Append("</style>");
+                html.Append(@"<script>
+function switchSheet(idx) {
+    var contents = document.querySelectorAll('.sheet-content');
+    var btns = document.querySelectorAll('.sheet-tab-btn');
+    for (var i = 0; i < contents.length; i++) {
+        contents[i].style.display = (i === idx) ? 'block' : 'none';
+        if (btns[i]) {
+            if (i === idx) btns[i].className = 'sheet-tab-btn active';
+            else btns[i].className = 'sheet-tab-btn';
+        }
+    }
+}
+</script></head><body>");
+                html.Append("<div class='sheet-container'>");
+                html.Append("<div class='sheet-toolbar'>");
+                html.Append("<div class='sheet-tabs'>").Append(sbTabs).Append("</div>");
+                html.Append("<div style='font-size:12px;color:").Append(isDark ? "#9cdcfe" : "#0284c7").Append(";font-weight:600;'>")
+                    .Append("📈 ").Append(EscapeHtml(Path.GetFileName(filePath))).Append(" (").Append(fiSize).Append(")</div>");
+                html.Append("</div>");
+                html.Append(sbSheets);
+                html.Append("</div></body></html>");
+
+                return html.ToString();
+            }
+        } catch (Exception ex) {
+            return "<div style='color:red;padding:20px;'>Failed to render Excel workbook: " + EscapeHtml(ex.Message) + "</div>";
+        }
+    }
+
+    /// <summary>Renders a CSV or TSV file into an interactive HTML spreadsheet.</summary>
+    public static string RenderCsvToHtml(string filePath, bool isDark, string[] highlightTerms) {
+        if (!File.Exists(filePath)) return "<div style='color:red;'>File not found.</div>";
+        try {
+            string[] allLines = File.ReadAllLines(filePath, Encoding.UTF8);
+            if (allLines.Length == 0) return "<div style='padding:20px;color:#888;'>Empty file.</div>";
+
+            char delimiter = ',';
+            string firstLine = allLines[0];
+            if (firstLine.IndexOf('\t') >= 0) delimiter = '\t';
+            else if (firstLine.IndexOf(';') >= 0) delimiter = ';';
+
+            var rows = new List<List<string>>();
+            int maxCol = 0;
+            int rowLimit = Math.Min(allLines.Length, 500);
+
+            for (int i = 0; i < rowLimit; i++) {
+                string line = allLines[i];
+                var cells = ParseCsvLine(line, delimiter);
+                if (cells.Count > maxCol) maxCol = cells.Count;
+                rows.Add(cells);
+            }
+
+            var fi = new FileInfo(filePath);
+            string fiSize = (fi.Length / 1024.0).ToString("N1") + " KB";
+
+            var sb = new StringBuilder();
+            sb.Append("<!DOCTYPE html><html><head><meta charset='utf-8'/><meta http-equiv='X-UA-Compatible' content='IE=edge'/>");
+            sb.Append("<style>").Append(GetBaseCss(isDark)).Append("</style></head><body>");
+            sb.Append("<div class='sheet-container'>");
+            sb.Append("<div class='sheet-toolbar'>");
+            sb.Append("<div style='font-size:12px;color:").Append(isDark ? "#9cdcfe" : "#0284c7").Append(";font-weight:600;'>")
+              .Append("📊 ").Append(EscapeHtml(Path.GetFileName(filePath))).Append(" (").Append(fiSize).Append(")</div>");
+            sb.Append("</div>");
+
+            sb.Append("<div class='sheet-table-scroll'><table class='sheet-table'>");
+            sb.Append("<thead><tr><th class='corner-hdr'>#</th>");
+            for (int c = 0; c < maxCol; c++) {
+                sb.Append("<th class='col-hdr'>").Append(ColIndexToName(c)).Append("</th>");
+            }
+            sb.Append("</tr></thead><tbody>");
+
+            for (int r = 0; r < rows.Count; r++) {
+                var row = rows[r];
+                sb.Append("<tr><th class='row-hdr'>").Append(r + 1).Append("</th>");
+                for (int c = 0; c < maxCol; c++) {
+                    string cellVal = (c < row.Count) ? row[c] : "";
+                    string hVal = HighlightHtml(cellVal, highlightTerms, isDark);
+                    double dummyNum;
+                    bool isNum = double.TryParse(cellVal, out dummyNum);
+                    string alignStyle = isNum ? " style='text-align:right;'" : "";
+                    sb.Append("<td").Append(alignStyle).Append(">").Append(hVal).Append("</td>");
+                }
+                sb.Append("</tr>");
+            }
+            sb.Append("</tbody></table></div>");
+
+            sb.Append("<div class='sheet-notice'>");
+            sb.Append("<span>Rows: ").Append(rows.Count).Append(allLines.Length > 500 ? " (showing first 500 of " + allLines.Length + ")" : "").Append(" • Columns: ").Append(maxCol).Append("</span>");
+            if (allLines.Length > 500) {
+                sb.Append("<span style='color:#ca8a04;'>⚠️ File contains more rows. Open in Excel for full data.</span>");
+            }
+            sb.Append("</div></div></body></html>");
+
+            return sb.ToString();
+        } catch (Exception ex) {
+            return "<div style='color:red;padding:20px;'>Failed to render CSV: " + EscapeHtml(ex.Message) + "</div>";
+        }
+    }
+
+    /// <summary>Renders a PDF file into a dedicated visual reader layout.</summary>
+    public static string RenderPdfToHtml(string filePath, string extractedText, bool isDark, string[] highlightTerms) {
+        if (!File.Exists(filePath)) return "<div style='color:red;'>File not found.</div>";
+
+        var fi = new FileInfo(filePath);
+        string fiName = EscapeHtml(fi.Name);
+        string fiSize = (fi.Length / 1024.0).ToString("N1") + " KB";
+        string fileUri = "file:///" + filePath.Replace('\\', '/');
+
+        var html = new StringBuilder();
+        html.Append("<!DOCTYPE html><html><head><meta charset='utf-8'/><meta http-equiv='X-UA-Compatible' content='IE=edge'/>");
+        html.Append("<style>").Append(GetBaseCss(isDark)).Append("</style></head><body style='padding:0;'>");
+        html.Append("<div class='pdf-container'>");
+        html.Append("<div class='pdf-toolbar'>");
+        html.Append("<div style='font-weight:600;font-size:13px;display:flex;align-items:center;gap:6px;'>");
+        html.Append("<span>📕</span> ").Append(fiName).Append(" <span style='font-size:11px;opacity:0.7;'>(").Append(fiSize).Append(")</span></div>");
+        html.Append("<div><a href='").Append(fileUri).Append("' target='_blank' class='pdf-btn'>⚡ Open in System PDF Reader</a></div>");
+        html.Append("</div>");
+
+        // Try embedding native PDF object first; if supported by Windows, it renders natively
+        html.Append("<div style='flex:1;display:flex;flex-direction:column;min-height:0;'>");
+        html.Append("<object data='").Append(fileUri).Append("#toolbar=1&navpanes=1' type='application/pdf' style='width:100%;height:100%;border:none;'>");
+
+        // Fallback: structured reader view
+        html.Append("<div class='pdf-reader-body'>");
+        html.Append("<div style='max-width:860px;margin:0 auto 12px;padding:8px 12px;background:").Append(isDark ? "#2d2d30" : "#f1f5f9").Append(";border-radius:4px;font-size:11.5px;color:").Append(isDark ? "#9cdcfe" : "#0284c7").Append(";'>");
+        html.Append("ℹ️ Formatted Text Reader View (Install Adobe Reader / Edge PDF plugin for native PDF layout inside browser)");
+        html.Append("</div>");
+
+        if (string.IsNullOrWhiteSpace(extractedText)) {
+            html.Append("<div class='pdf-page-card'>[No readable text layer found in this PDF. It may contain scanned images.]</div>");
+        } else {
+            string[] sections = extractedText.Split(new string[]{"\n\n\n", "Page ", "PAGE "}, StringSplitOptions.RemoveEmptyEntries);
+            if (sections.Length <= 1) {
+                sections = extractedText.Split(new string[]{"\n\n"}, StringSplitOptions.RemoveEmptyEntries);
+            }
+
+            for (int i = 0; i < sections.Length; i++) {
+                string sec = sections[i].Trim();
+                if (string.IsNullOrWhiteSpace(sec)) continue;
+                html.Append("<div class='pdf-page-card'>");
+                html.Append("<div style='font-size:11px;font-weight:bold;margin-bottom:8px;opacity:0.6;border-bottom:1px solid;padding-bottom:3px;'>Section ").Append(i + 1).Append("</div>");
+                html.Append(HighlightHtml(sec, highlightTerms, isDark));
+                html.Append("</div>");
+            }
+        }
+        html.Append("</div>");
+        html.Append("</object></div>");
+        html.Append("</div></body></html>");
+
+        return html.ToString();
+    }
+
+    /// <summary>Renders any generic text or ODF document content in a clean document card.</summary>
+    public static string RenderGenericDocumentToHtml(string filePath, string content, bool isDark, string[] highlightTerms) {
+        var fi = new FileInfo(filePath);
+        string fiName = EscapeHtml(fi.Name);
+        string fiSize = (fi.Length / 1024.0).ToString("N1") + " KB";
+
+        var html = new StringBuilder();
+        html.Append("<!DOCTYPE html><html><head><meta charset='utf-8'/><meta http-equiv='X-UA-Compatible' content='IE=edge'/>");
+        html.Append("<style>").Append(GetBaseCss(isDark)).Append("</style></head><body>");
+        html.Append("<div class='doc-card'>");
+        html.Append("<div class='doc-header'>");
+        html.Append("<div><div class='doc-title'><span>📄</span> ").Append(fiName).Append("</div>");
+        html.Append("<div class='doc-meta'>").Append(fiSize).Append("</div></div>");
+        html.Append("</div>");
+        html.Append("<div class='doc-body' style='white-space:pre-wrap;font-family:\"Segoe UI\",sans-serif;'>");
+        html.Append(HighlightHtml(content ?? "", highlightTerms, isDark));
+        html.Append("</div></div></body></html>");
+        return html.ToString();
+    }
+
+    private static int CellRefToColIndex(string cellRef, int fallback) {
+        if (string.IsNullOrEmpty(cellRef)) return fallback;
+        int col = 0;
+        int i = 0;
+        while (i < cellRef.Length && char.IsLetter(cellRef[i])) {
+            col = col * 26 + (char.ToUpperInvariant(cellRef[i]) - 'A' + 1);
+            i++;
+        }
+        return (col > 0) ? (col - 1) : fallback;
+    }
+
+    private static string ColIndexToName(int index) {
+        int dividend = index + 1;
+        string colName = "";
+        while (dividend > 0) {
+            int modulo = (dividend - 1) % 26;
+            colName = Convert.ToChar(65 + modulo) + colName;
+            dividend = (dividend - modulo) / 26;
+        }
+        return colName;
+    }
+
+    private static List<string> ParseCsvLine(string line, char delimiter) {
+        var result = new List<string>();
+        if (line == null) return result;
+
+        var cur = new StringBuilder();
+        bool inQuotes = false;
+        int len = line.Length;
+
+        for (int i = 0; i < len; i++) {
+            char c = line[i];
+            if (c == '"') {
+                if (inQuotes && i + 1 < len && line[i + 1] == '"') {
+                    cur.Append('"');
+                    i++;
+                } else {
+                    inQuotes = !inQuotes;
+                }
+            } else if (c == delimiter && !inQuotes) {
+                result.Add(cur.ToString());
+                cur.Length = 0;
+            } else {
+                cur.Append(c);
+            }
+        }
+        result.Add(cur.ToString());
+        return result;
+    }
+
+    public static string RenderToHtml(string filePath, string[] highlightTerms, bool isDark) {
+        if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) {
+            return "<html><body>File not found</body></html>";
+        }
+        string ext = Path.GetExtension(filePath).ToLowerInvariant();
+        if (highlightTerms == null) highlightTerms = new string[0];
+
+        switch (ext) {
+            case ".docx":
+            case ".docm":
+            case ".dotx":
+                return RenderDocxToHtml(filePath, isDark, highlightTerms);
+            case ".xlsx":
+            case ".xlsm":
+            case ".xltx":
+                return RenderExcelToHtml(filePath, isDark, highlightTerms);
+            case ".csv":
+            case ".tsv":
+                return RenderCsvToHtml(filePath, isDark, highlightTerms);
+            case ".pdf":
+                string pdfText = FastSearchEngineV2.ExtractTextFromOfficeFile(filePath);
+                return RenderPdfToHtml(filePath, pdfText, isDark, highlightTerms);
+            case ".doc":
+            case ".xls":
+            case ".ppt":
+            case ".pptx":
+            case ".pptm":
+            case ".odt":
+            case ".ods":
+            case ".odp":
+            default:
+                string genericText = FastSearchEngineV2.ExtractTextFromOfficeFile(filePath);
+                return RenderGenericDocumentToHtml(filePath, genericText, isDark, highlightTerms);
+        }
+    }
+
+    public static string RenderToHtml(string filePath, bool isDark, string[] highlightTerms) {
+        return RenderToHtml(filePath, highlightTerms, isDark);
+    }
+}
 "@
     if ($PSVersionTable.PSVersion.Major -le 5) {
         Add-Type -TypeDefinition $csharpEngine -ReferencedAssemblies 'System.IO.Compression', 'System.Xml', 'System.Core' -Language CSharp
@@ -1327,6 +2199,7 @@ function Get-AppConfig {
         SkipFileContent         = $false
         MatchRegex              = $false
         SearchDebounceMs        = 750
+        RichOfficePreviewDefault = $false
     }
 
     if (Test-Path -LiteralPath $script:ConfigFile) {
@@ -1350,6 +2223,7 @@ function Get-AppConfig {
             if ($null -ne $saved.MatchRegex) { $cfg.MatchRegex = [bool]$saved.MatchRegex }
             if ($saved.SearchDebounceMs) { $cfg.SearchDebounceMs = [int]$saved.SearchDebounceMs }
             if ($saved.Theme -and $saved.Theme -in @('Dark','Light')) { $cfg.Theme = [string]$saved.Theme }
+            if ($null -ne $saved.RichOfficePreviewDefault) { $cfg.RichOfficePreviewDefault = [bool]$saved.RichOfficePreviewDefault }
         } catch {
             Write-Warning "Failed to read config.json: $_"
         }
@@ -1372,11 +2246,13 @@ function Save-AppConfig {
         [bool]$SkipFileName = $false,
         [bool]$SkipFileContent = $false,
         [bool]$MatchRegex = $false,
-        [int]$SearchDebounceMs = 0
+        [int]$SearchDebounceMs = 0,
+        [Nullable[bool]]$RichOfficePreviewDefault = $null
     )
     $langToSave     = if ($Language)         { $Language }         elseif ($script:Config -and $script:Config.Language)  { $script:Config.Language }  else { 'en' }
     $themeToSave    = if ($Theme -in @('Dark','Light')) { $Theme } elseif ($script:CurrentTheme) { $script:CurrentTheme } else { 'Dark' }
     $debounceToSave = if ($SearchDebounceMs -gt 0) { $SearchDebounceMs } elseif ($script:Config -and $script:Config.SearchDebounceMs) { $script:Config.SearchDebounceMs } else { 750 }
+    $autoVisualToSave = if ($RichOfficePreviewDefault -ne $null) { [bool]$RichOfficePreviewDefault } elseif ($chkAutoVisualPreview) { [bool]$chkAutoVisualPreview.IsChecked } elseif ($script:Config -and ($null -ne $script:Config.RichOfficePreviewDefault)) { [bool]$script:Config.RichOfficePreviewDefault } else { $false }
     $cfg = [PSCustomObject]@{
         SearchFolder            = $SearchFolder
         FileExtensions          = $FileExtensions
@@ -1395,6 +2271,10 @@ function Save-AppConfig {
         SkipFileContent         = $SkipFileContent
         MatchRegex              = $MatchRegex
         SearchDebounceMs        = $debounceToSave
+        RichOfficePreviewDefault = $autoVisualToSave
+    }
+    if ($script:Config) {
+        $script:Config.RichOfficePreviewDefault = $autoVisualToSave
     }
     try {
         $json = $cfg | ConvertTo-Json -Depth 4
@@ -2015,6 +2895,12 @@ function Get-UiString {
                                 </StackPanel>
 
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <Border Name="panelViewModeToggle" Background="{DynamicResource BgPanelDark}" BorderBrush="{DynamicResource BrdrMain}" BorderThickness="1" CornerRadius="4" Padding="2" Margin="0,0,8,0" Visibility="Collapsed" VerticalAlignment="Center">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button Name="btnViewText"   Content="📄 Text"   Background="{DynamicResource AccentBlue}" Foreground="#FFFFFF" BorderThickness="0" Padding="8,3" FontSize="11" FontWeight="SemiBold" ToolTip="Plain text preview with match navigator"/>
+                                            <Button Name="btnViewVisual" Content="👁️ Visual" Background="Transparent" Foreground="{DynamicResource TextSecondary}" BorderThickness="0" Padding="8,3" FontSize="11" ToolTip="Rich visual preview (formatted document/spreadsheet)"/>
+                                        </StackPanel>
+                                    </Border>
                                     <Button Name="btnPreviewOpenFile"  Content="⚡ Open"       Padding="8,4" Margin="0,0,4,0"/>
                                     <Button Name="btnPreviewVSCode"    Content="💻 VS Code"    Background="{DynamicResource BtnSecondary}" Foreground="{DynamicResource TextPrimary}" Padding="8,4" Margin="0,0,4,0"/>
                                     <Button Name="btnPreviewOpenDir"   Content="📂 Folder"     Background="{DynamicResource BtnSecondary}" Foreground="{DynamicResource TextPrimary}" Padding="8,4" Margin="0,0,4,0"/>
@@ -2026,21 +2912,27 @@ function Get-UiString {
                             <!-- Row 1: Full file path -->
                             <TextBlock Name="txtFullPath" Grid.Row="1" Text="D:\Skrypty\..." Foreground="{DynamicResource TextSecondary}" FontSize="11" Margin="0,4,0,4" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
 
-                            <!-- Row 2: File metadata -->
-                            <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,2,0,0">
-                                <Border Background="{DynamicResource BgPanelDark}" CornerRadius="3" Padding="6,2" Margin="0,0,6,0">
-                                    <TextBlock Name="lblFileSize"     Text="0 KB"       FontSize="11" Foreground="{DynamicResource TextSecondary}"/>
-                                </Border>
-                                <Border Background="{DynamicResource BgPanelDark}" CornerRadius="3" Padding="6,2" Margin="0,0,6,0">
-                                    <TextBlock Name="lblLineCount"    Text="0 lines"    FontSize="11" Foreground="{DynamicResource TextSecondary}"/>
-                                </Border>
-                                <Border Background="{DynamicResource BgPanelDark}" CornerRadius="3" Padding="6,2" Margin="0,0,6,0">
-                                    <TextBlock Name="lblModifiedDate" Text="2026-00-00"  FontSize="11" Foreground="{DynamicResource TextSecondary}"/>
-                                </Border>
-                                <Border Name="borderMatchCount" Background="{DynamicResource AccentBlueDark}" CornerRadius="3" Padding="6,2" Margin="0,0,6,0">
-                                    <TextBlock Name="lblMatchBadge" Text="Matches: 0" FontSize="11" Foreground="{DynamicResource AccentBluePale}" FontWeight="SemiBold"/>
-                                </Border>
-                            </StackPanel>
+                            <!-- Row 2: File metadata and visual preview option -->
+                            <Grid Grid.Row="2" Margin="0,2,0,0">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Border Background="{DynamicResource BgPanelDark}" CornerRadius="3" Padding="6,2" Margin="0,0,6,0">
+                                        <TextBlock Name="lblFileSize"     Text="0 KB"       FontSize="11" Foreground="{DynamicResource TextSecondary}"/>
+                                    </Border>
+                                    <Border Background="{DynamicResource BgPanelDark}" CornerRadius="3" Padding="6,2" Margin="0,0,6,0">
+                                        <TextBlock Name="lblLineCount"    Text="0 lines"    FontSize="11" Foreground="{DynamicResource TextSecondary}"/>
+                                    </Border>
+                                    <Border Background="{DynamicResource BgPanelDark}" CornerRadius="3" Padding="6,2" Margin="0,0,6,0">
+                                        <TextBlock Name="lblModifiedDate" Text="2026-00-00"  FontSize="11" Foreground="{DynamicResource TextSecondary}"/>
+                                    </Border>
+                                    <Border Name="borderMatchCount" Background="{DynamicResource AccentBlueDark}" CornerRadius="3" Padding="6,2" Margin="0,0,6,0">
+                                        <TextBlock Name="lblMatchBadge" Text="Matches: 0" FontSize="11" Foreground="{DynamicResource AccentBluePale}" FontWeight="SemiBold"/>
+                                    </Border>
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                    <CheckBox Name="chkAutoVisualPreview" Content="Auto Visual" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center" ToolTip="Always open Docx, Excel, and PDF files directly in Visual preview mode"/>
+                                </StackPanel>
+                            </Grid>
 
                             <!-- Row 3: Match Navigator -->
                             <Border Name="panelMatchNav" Grid.Row="3"
@@ -2074,6 +2966,9 @@ function Get-UiString {
                              IsInactiveSelectionHighlightEnabled="True"
                              CaretBrush="{DynamicResource CaretCol}"
                              SelectionBrush="{DynamicResource AccentBlue}"/>
+
+                    <!-- Visual HTML / WebBrowser preview for Docx, Excel, PDF -->
+                    <WebBrowser Name="wbVisualPreview" Grid.Row="1" Visibility="Collapsed"/>
                 </Grid>
             </Grid>
         </Grid>
@@ -2157,6 +3052,25 @@ $btnPreviewOpenDir   = $window.FindName("btnPreviewOpenDir")
 $btnPreviewCopyPath  = $window.FindName("btnPreviewCopyPath")
 $btnPreviewCopyText  = $window.FindName("btnPreviewCopyText")
 
+# Rich preview controls
+$panelViewModeToggle   = $window.FindName("panelViewModeToggle")
+$btnViewText           = $window.FindName("btnViewText")
+$btnViewVisual         = $window.FindName("btnViewVisual")
+$chkAutoVisualPreview  = $window.FindName("chkAutoVisualPreview")
+$wbVisualPreview       = $window.FindName("wbVisualPreview")
+
+if ($wbVisualPreview) {
+    $wbVisualPreview.Add_Navigated({
+        param($sender, $e)
+        try {
+            $ax = $sender.GetType().GetProperty("AxIWebBrowser2", [System.Reflection.BindingFlags]"Instance,NonPublic").GetValue($sender, $null)
+            if ($ax) {
+                $ax.GetType().InvokeMember("Silent", [System.Reflection.BindingFlags]"SetProperty", $null, $ax, @($true))
+            }
+        } catch {}
+    })
+}
+
 $lblStatus           = $window.FindName("lblStatus")
 $lblStatusRight      = $window.FindName("lblStatusRight")
 $lblTopStats         = $window.FindName("lblTopStats")
@@ -2212,6 +3126,9 @@ $script:CurrentTheme           = if ($script:Config.Theme -in @('Dark','Light'))
 $script:CurrentLanguage        = if ($script:Config.Language) { $script:Config.Language } else { 'en' }
 $script:IsWindowLoaded         = $false
 $script:SuppressDebounceSearch = $false
+$script:CurrentPreviewMode     = 'Text'
+$script:CurrentPreviewHtml     = $null
+$script:OfficeVisualExts       = @('.docx','.docm','.dotx','.doc','.xlsx','.xlsm','.xltx','.xls','.pdf','.csv','.tsv','.pptx','.pptm','.odt','.ods','.odp','.odg')
 
 function Get-ConfiguredExtensions {
     $raw = if ($txtExtensions) { $txtExtensions.Text } else { '' }
@@ -2380,6 +3297,11 @@ function Apply-Theme {
 
     # Refresh button colours that are set programmatically
     Update-ExtAllButtonState
+
+    # Re-render visual preview with new theme if active
+    if ($script:CurrentPreviewMode -eq 'Visual' -and $script:SelectedFilePath) {
+        Set-PreviewViewMode 'Visual'
+    }
 }
 
 # Initialize fields from configuration
@@ -2424,6 +3346,9 @@ if ($null -ne $script:Config.MatchRegex) {
     $chkRegex.IsChecked = [bool]$script:Config.MatchRegex
 } else {
     $chkRegex.IsChecked = $false
+}
+if ($chkAutoVisualPreview) {
+    $chkAutoVisualPreview.IsChecked = if ($null -ne $script:Config.RichOfficePreviewDefault) { [bool]$script:Config.RichOfficePreviewDefault } else { $false }
 }
 
 # Populate the language selector from the loaded catalog
@@ -2579,6 +3504,18 @@ function Set-UiLanguage {
     $lblMatchNavLabel.Text     = Get-UiString 'MatchNavLabel' '🎯 Matches in file:'
     $btnPrevMatch.Content      = Get-UiString 'BtnPrevMatch' '▲ Previous'
     $btnNextMatch.Content      = Get-UiString 'BtnNextMatch' '▼ Next'
+    if ($btnViewText) {
+        $btnViewText.Content   = Get-UiString 'BtnViewText' '📄 Text'
+        $btnViewText.ToolTip   = Get-UiString 'TooltipViewText' 'Plain text preview with match navigator'
+    }
+    if ($btnViewVisual) {
+        $btnViewVisual.Content = Get-UiString 'BtnViewVisual' '👁️ Visual'
+        $btnViewVisual.ToolTip = Get-UiString 'TooltipViewVisual' 'Rich visual preview (formatted document/spreadsheet)'
+    }
+    if ($chkAutoVisualPreview) {
+        $chkAutoVisualPreview.Content = Get-UiString 'OptionAutoVisual' 'Auto Visual'
+        $chkAutoVisualPreview.ToolTip = Get-UiString 'TooltipAutoVisual' 'Always open Docx, Excel, and PDF files directly in Visual preview mode'
+    }
 
     # Refresh dynamic labels that depend on current state
     Update-TokenLabels
@@ -2638,6 +3575,59 @@ function Jump-ToMatch([int]$targetIndex) {
     $txtPreview.Select($match.Index, $match.Length)
     $targetLine = [Math]::Max(0, $match.LineNumber - 4)
     $txtPreview.ScrollToLine($targetLine)
+}
+
+function Set-PreviewViewMode {
+    param([ValidateSet('Text','Visual')][string]$Mode = 'Text')
+
+    $script:CurrentPreviewMode = $Mode
+    $isDark = ($script:CurrentTheme -ne 'Light')
+
+    if ($Mode -eq 'Visual') {
+        if ($btnViewVisual) {
+            $btnViewVisual.Background = $window.FindResource('AccentBlue')
+            $btnViewVisual.Foreground = [System.Windows.Media.Brushes]::White
+            $btnViewVisual.FontWeight = [System.Windows.FontWeights]::SemiBold
+        }
+        if ($btnViewText) {
+            $btnViewText.Background = [System.Windows.Media.Brushes]::Transparent
+            $btnViewText.Foreground = $window.FindResource('TextSecondary')
+            $btnViewText.FontWeight = [System.Windows.FontWeights]::Normal
+        }
+
+        if ($txtPreview) { $txtPreview.Visibility = [System.Windows.Visibility]::Collapsed }
+        if ($wbVisualPreview) { $wbVisualPreview.Visibility = [System.Windows.Visibility]::Visible }
+
+        if ($script:SelectedFilePath -and (Test-Path -LiteralPath $script:SelectedFilePath)) {
+            try {
+                $tokens = if ($script:CurrentTokens) { $script:CurrentTokens } else { @() }
+                $html = [FastOfficeVisualizer]::RenderToHtml($script:SelectedFilePath, $tokens, $isDark)
+                $script:CurrentPreviewHtml = $html
+                if ($wbVisualPreview) {
+                    $wbVisualPreview.NavigateToString($html)
+                }
+            } catch {
+                if ($txtPreview) {
+                    $txtPreview.Visibility = [System.Windows.Visibility]::Visible
+                    $wbVisualPreview.Visibility = [System.Windows.Visibility]::Collapsed
+                }
+            }
+        }
+    } else {
+        if ($btnViewText) {
+            $btnViewText.Background = $window.FindResource('AccentBlue')
+            $btnViewText.Foreground = [System.Windows.Media.Brushes]::White
+            $btnViewText.FontWeight = [System.Windows.FontWeights]::SemiBold
+        }
+        if ($btnViewVisual) {
+            $btnViewVisual.Background = [System.Windows.Media.Brushes]::Transparent
+            $btnViewVisual.Foreground = $window.FindResource('TextSecondary')
+            $btnViewVisual.FontWeight = [System.Windows.FontWeights]::Normal
+        }
+
+        if ($wbVisualPreview) { $wbVisualPreview.Visibility = [System.Windows.Visibility]::Collapsed }
+        if ($txtPreview) { $txtPreview.Visibility = [System.Windows.Visibility]::Visible }
+    }
 }
 
 function Show-FilePreview($filePath) {
@@ -2712,8 +3702,23 @@ function Show-FilePreview($filePath) {
             $panelMatchNav.Visibility = [System.Windows.Visibility]::Collapsed
             $borderMatchCount.Visibility = [System.Windows.Visibility]::Collapsed
         }
+
+        # Determine view mode for Office/PDF documents
+        $isVisualCapable = ($ext -in $script:OfficeVisualExts)
+        if ($isVisualCapable) {
+            if ($panelViewModeToggle) { $panelViewModeToggle.Visibility = [System.Windows.Visibility]::Visible }
+            if ($chkAutoVisualPreview) { $chkAutoVisualPreview.Visibility = [System.Windows.Visibility]::Visible }
+
+            $targetMode = if ($chkAutoVisualPreview -and $chkAutoVisualPreview.IsChecked) { 'Visual' } else { 'Text' }
+            Set-PreviewViewMode $targetMode
+        } else {
+            if ($panelViewModeToggle) { $panelViewModeToggle.Visibility = [System.Windows.Visibility]::Collapsed }
+            if ($chkAutoVisualPreview) { $chkAutoVisualPreview.Visibility = [System.Windows.Visibility]::Collapsed }
+            Set-PreviewViewMode 'Text'
+        }
     } catch {
         $txtPreview.Text = (Get-UiString 'StatusReadError' 'Error reading file: {0}') -f $_
+        Set-PreviewViewMode 'Text'
     }
 }
 
@@ -3481,6 +4486,36 @@ $btnPreviewCopyText.Add_Click({
         $lblStatus.Text = Get-UiString 'StatusCopiedContent' 'Entire file content copied to clipboard.'
     }
 })
+
+# View mode toggle actions
+if ($btnViewText) {
+    $btnViewText.Add_Click({
+        Set-PreviewViewMode 'Text'
+    })
+}
+
+if ($btnViewVisual) {
+    $btnViewVisual.Add_Click({
+        Set-PreviewViewMode 'Visual'
+    })
+}
+
+if ($chkAutoVisualPreview) {
+    $chkAutoVisualPreview.Add_Click({
+        $script:Config.RichOfficePreviewDefault = [bool]$chkAutoVisualPreview.IsChecked
+        Save-AppConfig -RichOfficePreviewDefault $chkAutoVisualPreview.IsChecked
+        if ($script:SelectedFilePath) {
+            $fExt = [System.IO.Path]::GetExtension($script:SelectedFilePath).ToLowerInvariant()
+            if ($fExt -in $script:OfficeVisualExts) {
+                if ($chkAutoVisualPreview.IsChecked) {
+                    Set-PreviewViewMode 'Visual'
+                } else {
+                    Set-PreviewViewMode 'Text'
+                }
+            }
+        }
+    })
+}
 
 # Tree context menu
 $menuOpenFile.Add_Click({

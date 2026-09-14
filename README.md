@@ -136,13 +136,24 @@ Powered by an in-memory compiled C# parallel search engine ([FastSearchEngineV2]
 - **Metadata Header Card**: Displays file name, extension tag, full directory path, file size, line count, and last write time.
 - **Quick Action Buttons**: Direct header buttons to `⚡ Open` (default app), `💻 VS Code` (`code -g`), `📂 Folder` (Explorer reveal), `📋 Path` (copy path), and `📄 Copy code` (copy full text).
 
-### 8. Zero-Dependency Office, OpenDocument, Legacy Binary & PDF Text Extraction
+### 8. Rich Visual Document Preview & Instant Text Mode (v1.4)
+- **Instant Default Plain-Text Preview (< 2ms)**: FastSearcher maintains lightning-fast result browsing by defaulting to plain text. Keyboard navigation, file selection, and match scrolling remain instant with zero lag.
+- **Interactive View Mode Switcher (`[ 📄 Text ] [ 👁️ Visual ]`)**: When viewing a Word document (`.docx`), spreadsheet (`.xlsx`, `.csv`), or PDF (`.pdf`), a dedicated pill-button toggle appears in the preview header card:
+  - `[ 📄 Text ]`: Plain-text viewer with line numbers and full Match Navigator (<kbd>F3</kbd> / <kbd>Shift</kbd>+<kbd>F3</kbd>) support.
+  - `[ 👁️ Visual ]`: Interactive formatted view powered by the built-in [FastOfficeVisualizer](FastSearcher.ps1) C# engine.
+- **Formatted DOCX Viewer**: Parses OOXML `word/document.xml`, rendering headings (H1, H2, H3), paragraphs, bullet/numbered lists, styled tables with cell borders, inline base64 images from `word/media/`, and glowing search match highlights.
+- **Tabbed Excel & CSV Spreadsheet Viewer**: Parses `xl/workbook.xml`, `xl/sharedStrings.xml`, and `xl/worksheets/sheet*.xml`. Renders workbook tabs (`Sheet1`, `Sheet2`...) with dynamic tab switching, sticky column headers (A, B, C...) and row numbers (1, 2, 3...), cell grid borders, and search highlights (capped at 500 rows per sheet for sub-50ms render performance).
+- **Embedded PDF Viewer & Reader Layout**: Embeds native browser PDF viewing with fallback structured reader layout showing extracted text with highlighted search terms and an `[ ⚡ Open in System PDF Reader ]` button.
+- **Persistent Auto-Visual Option (`[✓] Auto Visual`)**: Checkbox located in the metadata header row allowing users to make Visual Preview the automatic default for all Office/PDF files. Persisted in [config.json](config.json) via `RichOfficePreviewDefault`.
+- **Zero COM or Third-Party Dependencies**: No Microsoft Office, Excel, Word, Adobe Acrobat, or third-party NuGet packages required; compiled directly into .NET C#.
+
+### 9. Zero-Dependency Office, OpenDocument, Legacy Binary & PDF Text Extraction
 - **Native .NET Engine**: Searches inside ZIP-based Office files (`.xlsx`, `.xlsm`, `.xltx`, `.docx`, `.docm`, `.dotx`, `.pptx`, `.pptm`), OpenDocument formats (`.odt`, `.ods`, `.odp`, `.odg`), legacy binary OLE2 formats (`.xls`, `.doc`, `.ppt`), and searchable PDF files (`.pdf`) without requiring Microsoft Office, Adobe Acrobat, COM Interop, or third-party DLLs.
 - **XML, Binary & PDF Stream Extraction**: Built-in C# routines target internal XML files for modern archives, scan uncompressed compound streams for UTF-16LE and ANSI text runs in legacy files, and decompress `/FlateDecode` streams in PDF files via native `DeflateStream`, parsing standard PDF text operators (`Tj`, `TJ`, `'`, `"`).
 - **PDF Scope & Text Layer**: Targets digital text-layer PDFs (Word/Excel exports, system reports, invoices, electronic documentation). Scanned image-only PDFs requiring OCR are excluded to keep searches instantaneous.
 - **Plain-Text Preview**: When previewing any Office, OpenDocument, or PDF file, FastSearcher extracts readable text directly into the preview pane with an informative banner notice (`[Plain text extracted — open file for full formatting]`).
 
-### 9. Multi-Language Localization (i18n)
+### 10. Multi-Language Localization (i18n)
 - Powered by an external JSON translation catalog ([language.json](language.json)).
 - Supports **English (`en`)**, **German (`de`)**, and **Polish (`pl`)**.
 - Runtime switching via the `Language:` dropdown without requiring an application restart or clearing active search results.
@@ -189,6 +200,13 @@ The script compiles specialized C# classes using `Add-Type` at startup:
    - `ExtractTextFromPdfFile(string filePath)`: Decompresses `/FlateDecode` streams via raw `DeflateStream` and extracts literal string tokens from PDF content streams.
    - `Search(string rootPath, string[] tokens, ...)`: Executes multi-core parallel file scanning with signature block filtering, Office, and PDF text extraction.
    - `FindMatches(string content, string[] tokens, ...)`: Computes line offsets and exact token match locations for the viewer.
+6. **[FastOfficeVisualizer](FastSearcher.ps1)** (v1.4):
+   - `RenderToHtml(string filePath, string[] highlightTerms, bool isDark)`: High-performance visual document formatter transforming DOCX, Excel spreadsheets, CSVs, and PDFs into styled HTML rendered directly within WPF's `WebBrowser` control.
+   - `RenderDocxToHtml(...)`: Parses `word/document.xml`, formatting headings, styled paragraphs, lists, tables with borders, inline base64 images from `word/media/`, and highlighted search phrases.
+   - `RenderExcelToHtml(...)`: Builds an interactive spreadsheet viewer with sheet switcher tabs, sticky column/row headers (A, B, C... / 1, 2, 3...), and cell match highlights.
+   - `RenderCsvToHtml(...)`: Converts delimited text into a structured spreadsheet table with sticky headers.
+   - `RenderPdfToHtml(...)`: Embeds native browser PDF viewing with fallback structured reader view and system PDF viewer launcher.
+   - `RenderGenericDocumentToHtml(...)`: Clean document card fallback for legacy binary documents.
 
 ---
 
@@ -202,17 +220,15 @@ The script compiles specialized C# classes using `Add-Type` at startup:
 | Search:     [ Mnich "AD compare" -test  [x]] [ ] Whole [ ] Same line [ ] Skip name [ ] Skip cont [ ] Regex [🔍 Search] [↺ Reset] |
 | Filters:    Modified: [ 2026-09-03 v][x][Presets v]       Extensions: [*.ps1, *.md    ] [Presets v] [*.* All]          |
 +------------------------------------------------+--------------------------------------------------------------+
-| Results 599 files          [⊞ Expand] [⊟ Col]  | ⚡ Translate-BcXlf.ps1  [PS1]         [⚡ Open][💻 VS Code][📂 Dir] |
-+------------------------------------------------+ D:\Skrypty\NAV\Translate-BcXlf.ps1    [📋 Path][📄 Copy code] |
-| v 📁 NAV                                       | [ 14.2 KB ]  [ 382 lines ]  [ 2026-09-04 14:20 ] [Matches: 3] |
-|   > 📁 Modules                                 +--------------------------------------------------------------+
-|   ⚡ Translate-BcXlf.ps1                       | 🎯 Matches in file: Match 1 of 3 (Line 42: 'Mnich') [▲ Prev][▼ Next] |
-|   📝 README.md                                 +--------------------------------------------------------------+
-| > 📁 ActiveDirectory                           | 39: function Translate-BcXlf {                               |
-|   ⚡ Compare-ADUsers.ps1                       | 40:     [CmdletBinding()]                                     |
-|                                                | 41:     param(                                                |
-|                                                | 42:         [string]$Author = "Adam Mnich", <== MATCH         |
-|                                                | 43:         [string]$TargetLang = "pl-PL"                     |
+| Results 599 files          [⊞ Expand] [⊟ Col]  | ⚡ Report.docx [DOCX]  [📄 Text][👁️ Visual] [⚡ Open][💻 Code][📂 Dir] |
++------------------------------------------------+ D:\Skrypty\Docs\Report.docx                  [📋 Path][📄 Copy] |
+| v 📁 Docs                                      | [ 24.5 KB ]  [ 120 lines ]  [ 2026-09-12 ]           [ ] Auto Visual  |
+|   📃 Report.docx                               +--------------------------------------------------------------+
+|   📈 Financials.xlsx                           | 🎯 Matches in file: Match 1 of 2 (Line 5: 'Quarterly') [▲ Prev][▼ Next] |
+|   📕 Summary.pdf                               +--------------------------------------------------------------+
+| > 📁 Scripts                                   |  Executive Summary                                           |
+|   ⚡ Deploy.ps1                                |  =================                                           |
+|                                                |  Quarterly financial overview for Q3... <== MATCH             |
 +------------------------------------------------+--------------------------------------------------------------+
 | Found 599 files in 390 ms in directory D:\Skrypty  |  Total: 435 ms                  D:\Skrypty | UTF-8 with BOM |
 +---------------------------------------------------------------------------------------------------------------+
@@ -247,6 +263,9 @@ The script compiles specialized C# classes using `Add-Type` at startup:
 | **Results Tree** | `treeResults` | Virtualized WPF TreeView displaying matching folders and files with icons, badges, and double-click folder toggling. |
 | **Expand / Collapse** | `btnExpandAll` / `btnCollapseAll` | Expands or collapses all folder branches in the tree. |
 | **Preview Box** | `txtPreview` | Read-only monospace editor with syntax view, match highlighting, and persistent selection. |
+| **Visual Preview** | `wbVisualPreview` | Embedded WebBrowser control hosting rich HTML rendering for DOCX, Excel, and PDF files. |
+| **View Mode Switcher** | `panelViewModeToggle` | Toolbar container hosting `[ 📄 Text ]` (`btnViewText`) and `[ 👁️ Visual ]` (`btnViewVisual`) toggle buttons. |
+| **Auto Visual Option** | `chkAutoVisualPreview` | Checkbox in file metadata row to make rich visual preview automatic for Office/PDF files. |
 | **Match Navigator** | `panelMatchNav` | Previous (`btnPrevMatch`) and Next (`btnNextMatch`) match cycling bar with line-offset jumping. |
 | **Top Stats** | `lblTopStats` | Summary badge showing file count and C# engine scan time (`Found: 599 (390 ms)`). |
 | **Bottom Status Bar** | `lblStatus` | Detailed execution status reporting scanned count, match count, search time, and total GUI unlock duration. |
@@ -396,7 +415,8 @@ The application automatically loads and persists state in [config.json](config.j
   "SkipFileName": false,
   "SkipFileContent": false,
   "MatchRegex": false,
-  "SearchDebounceMs": 750
+  "SearchDebounceMs": 750,
+  "RichOfficePreviewDefault": false
 }
 ```
 
@@ -421,6 +441,7 @@ The application automatically loads and persists state in [config.json](config.j
 | `FontSize` | `int` | `13` | Base font size for editor preview. |
 | `Theme` | `string` | `"Dark"` | Application theme identifier (`"Dark"` or `"Light"`). |
 | `Language` | `string` | `"en"` | Active language code (`"en"`, `"de"`, `"pl"`). |
+| `RichOfficePreviewDefault` | `bool` | `false` | When true, automatically displays supported Office and PDF files directly in rich visual preview mode. |
 
 ---
 
@@ -432,7 +453,7 @@ The repository includes a dedicated build script [Build-Exe.ps1](Build-Exe.ps1) 
 - Automatically verifies and installs the `ps2exe` module from the PowerShell Gallery if not present.
 - Detects and stops any running instance of `FastSearcher.exe` before compilation to avoid file locks.
 - Sets `-STA` (Single-Threaded Apartment) and `-NoConsole` mode for a clean windowed GUI execution.
-- Embeds metadata: Product Name, Version (`1.3.0.0`), Company (`Adam Mnich`), and custom icon (`Logo_AM6.ico`).
+- Embeds metadata: Product Name, Version (`1.4.0.0`), Company (`Adam Mnich`), and custom icon (`Logo_AM6.ico`).
 - Ensures runtime companion files ([config.json](config.json), [language.json](language.json)) exist in the output directory.
 
 ### Running the Build
