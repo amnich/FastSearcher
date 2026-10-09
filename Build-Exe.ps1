@@ -6,8 +6,8 @@
 .DESCRIPTION
     Verifies the presence of the ps2exe module (installs from PSGallery if needed) and produces
     a windowed application without console (-NoConsole) in Single-Threaded Apartment (-STA) mode.
-    After compilation, ensures language.json and config.json are present next to the output
-    executable so the multi-language UI (EN/DE/PL) and saved settings work at runtime.
+    After compilation, ensures language.json is present next to the output executable and builds
+    an Inno Setup installer using the same executable version and icon. Signing is optional.
 
 .PARAMETER OutputFile
     Path to the output executable (.EXE). Defaults to FastSearcher.exe next to this script.
@@ -15,9 +15,23 @@
 .PARAMETER IconFile
     Path to a .ico icon file (optional).
 
+.PARAMETER NoInstaller
+    Skip building the Inno Setup installer. This is useful when only the EXE is required.
+
+.PARAMETER SignInstaller
+    Sign and timestamp the installer. Requires SignTool and a valid code-signing certificate.
+
 .EXAMPLE
     .\Build-Exe.ps1
-    Compiles FastSearcher.exe in the current folder.
+    Compiles FastSearcher.exe and creates a signed installer in dist\installer.
+
+.EXAMPLE
+    .\Build-Exe.ps1 -NoInstaller
+    Compiles only FastSearcher.exe.
+
+.EXAMPLE
+    .\Build-Exe.ps1 -SignInstaller
+    Compiles the EXE and creates a signed installer.
 
 .NOTES
     Encoding: UTF-8 with BOM
@@ -29,7 +43,13 @@ param(
     [string]$OutputFile,
 
     [Parameter(Mandatory = $false)]
-    [string]$IconFile = "D:\Skrypty\Mnich_Adam_Skrypty\!Helper\Logo_AM6.ico"
+    [string]$IconFile = "D:\Skrypty\Mnich_Adam_Skrypty\!Helper\Logo_AM6.ico",
+
+    [Parameter(Mandatory = $false)]
+    [switch]$NoInstaller,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$SignInstaller
 )
 
 Set-StrictMode -Version Latest
@@ -80,6 +100,20 @@ if (-not (Test-Path $InputScript)) {
 Write-Host "Source file : $InputScript" -ForegroundColor White
 Write-Host "Output file : $OutputFile" -ForegroundColor White
 
+#get version from exe file if exists and bump build number
+$Currentversion = [version]"0.0.1"
+if (Test-Path -LiteralPath $OutputFile) {
+    try {
+        $fileVersionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($OutputFile)
+        $Currentversion = [version]$fileVersionInfo.FileVersion
+        #increment build number by 1
+        $Currentversion = [version]::new($Currentversion.Major, $Currentversion.Minor, $Currentversion.Build + 1)
+    } catch {
+        Write-Warning "Failed to retrieve version from existing executable. Defaulting to 0.0.1"
+    }
+}
+
+
 # 3. PS2EXE compilation parameters
 $CompileParams = @{
     InputFile   = $InputScript
@@ -91,14 +125,29 @@ $CompileParams = @{
     Company     = 'Adam Mnich'
     Product     = 'FastSearcher'
     Copyright   = 'Copyright (c) 2026 Adam Mnich'
-    Version     = '1.4.0.0'
+    Version     = $Currentversion.ToString()
     NoError     = $true
     NoOutput    = $true
 }
 
-if (-not [string]::IsNullOrWhiteSpace($IconFile) -and (Test-Path $IconFile)) {
-    $CompileParams['IconFile'] = $IconFile
-    Write-Host "Icon file   : $IconFile" -ForegroundColor White
+$resolvedIconFile = $null
+if (-not [string]::IsNullOrWhiteSpace($IconFile) -and (Test-Path -LiteralPath $IconFile -PathType Leaf)) {
+    $resolvedIconFile = (Resolve-Path -LiteralPath $IconFile).Path
+} else {
+    $sharedScriptsRoot = Join-Path (Split-Path -Parent $ScriptDir) 'Mnich_Adam_Skrypty'
+    $fallbackIcons = @(
+        (Join-Path $sharedScriptsRoot '!Helper\Logo_AM6.ico')
+    )
+    $resolvedIconFile = $fallbackIcons |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+        Select-Object -First 1
+}
+
+if ($resolvedIconFile) {
+    $CompileParams['IconFile'] = $resolvedIconFile
+    Write-Host "Icon file   : $resolvedIconFile" -ForegroundColor White
+} else {
+    Write-Warning 'No application icon was found; the EXE will be built without a custom icon.'
 }
 
 # 4. Invoke compiler
@@ -128,4 +177,27 @@ foreach ($extraFile in @('language.json')) {
     elseif (-not (Test-Path $sourceFile) -and $extraFile -eq 'language.json') {
         Write-Warning "language.json not found next to the source script; the compiled EXE will fall back to built-in English strings."
     }
+}
+
+# 6. Build the installer with the exact EXE, version, and icon produced above.
+if (-not $NoInstaller) {
+    if (-not $resolvedIconFile) {
+        throw 'Cannot build the installer without an icon. Specify -IconFile or use -NoInstaller to build only the EXE.'
+    }
+
+    $installerBuildScript = Join-Path $ScriptDir 'installer\Build-Installer.ps1'
+    if (-not (Test-Path -LiteralPath $installerBuildScript -PathType Leaf)) {
+        throw "Installer build script was not found: $installerBuildScript"
+    }
+
+    Write-Host "`nBuilding installer for version $($Currentversion.ToString())..." -ForegroundColor Cyan
+    $installerArguments = @{
+        ExePath    = $item.FullName
+        AppVersion = $Currentversion.ToString()
+        IconFile   = $resolvedIconFile
+    }
+    if ($SignInstaller) {
+        $installerArguments['Sign'] = $true
+    }
+    & $installerBuildScript @installerArguments
 }

@@ -21,9 +21,17 @@ Powered by an in-memory compiled C# parallel search engine ([FastSearchEngineV2]
 | **Configuration** | [config.json](config.json) | Persistent application settings and filter preferences |
 | **Localization** | [language.json](language.json) | Multi-language catalog (English, German, Polish) |
 | **Build Script** | [Build-Exe.ps1](Build-Exe.ps1) | Standalone `.exe` packaging script using PS2EXE |
+| **Installer** | [installer/Build-Installer.ps1](installer/Build-Installer.ps1) | Creates and signs an Inno Setup installer |
+| **Installer** | [installer/Build-Installer.ps1](installer/Build-Installer.ps1) | Creates an Inno Setup installer; signing is optional |
 | **Executable** | [FastSearcher.exe](FastSearcher.exe) | Compiled standalone windowed binary |
 | **GUI Screenshots** | [Res/](Res/) | Screenshot assets: [1.png](Res/1.png), [1.1.png](Res/1.1.png), [2.png](Res/2.png), [3.png](Res/3.png) |
 | **Polish Guide** | [FastSearcher.md](FastSearcher.md) | Architectural summary and documentation (Polish) |
+
+---
+
+## Build the Installer
+
+Run `Build-Exe.ps1` to compile the EXE and automatically create an unsigned installer at `dist/installer/FastSearcher-Setup-<version>.exe` using the same version and icon. Signing is optional: use `Build-Exe.ps1 -SignInstaller` to sign and timestamp the installer, or pass `-Sign` to `installer/Build-Installer.ps1` when building separately. Signed builds require Windows SignTool and a valid code-signing certificate in the current user's certificate store. Use `Build-Exe.ps1 -NoInstaller` to build only the EXE. The installer supports x86-compatible Windows and installs per-user under `%LOCALAPPDATA%\Programs\FastSearcher`, so administrator rights are not required. It installs the EXE and required language catalog, includes the README and license, and creates a per-user Start Menu shortcut with an optional Desktop shortcut. FastSearcher stores user settings in `%USERPROFILE%\FastSearcher\config.json`; these settings are not bundled or removed by uninstall.
 
 ---
 
